@@ -3,25 +3,30 @@ from pathlib import Path
 
 import pytest
 
-from rendiv_api.migrations import MigrationError, apply_migrations, database_is_ready
+from rendiv_api.migrations import (
+    MigrationError,
+    apply_migrations,
+    configure_write_connection,
+    database_is_ready,
+)
 
 
 def test_initial_migration_is_idempotent_and_wal_backed(tmp_path: Path):
     database = tmp_path / "rendiv.sqlite3"
 
-    assert apply_migrations(database) == 1
-    assert apply_migrations(database) == 1
+    assert apply_migrations(database) == 2
+    assert apply_migrations(database) == 2
     assert database_is_ready(database)
 
     connection = sqlite3.connect(database)
     try:
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert connection.execute(
-            "SELECT version, name, length(checksum) FROM schema_migrations"
-        ).fetchone() == (1, "bootstrap", 64)
+            "SELECT version, name, length(checksum) FROM schema_migrations ORDER BY version"
+        ).fetchall() == [(1, "bootstrap", 64), (2, "jobs_and_events", 64)]
         assert connection.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'"
-        ).fetchone() is None
+            "SELECT count(*) FROM jobs"
+        ).fetchone() == (0,)
     finally:
         connection.close()
 
@@ -76,6 +81,19 @@ def test_missing_database_parent_is_not_created(tmp_path: Path):
         apply_migrations(database)
 
     assert not database.parent.exists()
+
+
+def test_write_connection_pragmas_are_applied_and_verified(tmp_path: Path):
+    database = tmp_path / "pragma-test.sqlite3"
+    connection = sqlite3.connect(database, isolation_level=None)
+    try:
+        configure_write_connection(connection, busy_timeout_ms=1_234)
+        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert connection.execute("PRAGMA synchronous").fetchone()[0] == 2
+        assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 1_234
+    finally:
+        connection.close()
 
 
 def test_failed_new_migration_rolls_back_ddl_and_ledger(tmp_path: Path):

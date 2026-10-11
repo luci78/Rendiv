@@ -44,7 +44,7 @@ La inițializarea documentară, etapele de implementare 2–5 nu fuseseră execu
 | Etapă | Rezultat urmărit | Stare |
 |---|---|---|
 | 1. Schelet API | Configurație tipată, health/readiness, migrații SQLite checksum/fail-closed și teste izolate | Încheiată local; fără deployment sau bază persistentă de producție |
-| 2. SQLite + enqueue | Persistență joburi, idempotency și audit | Neîncepută |
+| 2. SQLite + enqueue | Persistență joburi, idempotency și audit | Încheiată local; numai strat intern, fără rută publică |
 | 3. Status + autentificare | Contract HTTP, ACL și limite | Neîncepută |
 | 4. Runtime izolat | Container și volum propriu | Neîncepută; necesită aprobare separată |
 | 5. Backup și observabilitate | Proceduri și metrici | Neîncepută |
@@ -55,6 +55,14 @@ La inițializarea documentară, etapele de implementare 2–5 nu fuseseră execu
 - Testele folosesc fișiere SQLite în directoare temporare; aplicația nu creează automat directorul părinte configurat. Nu se configurează endpointuri de job, enqueue/status, worker, MCP sau acces la servicii externe.
 - Acceptanța locală: 9 teste trecute cu Python 3.12.3; `git diff --check` trece. Dependențele de test au fost instalate numai în `/tmp/rendiv-stage1-venv`; nu a fost pornit serviciul API.
 - Nu s-a creat bază persistentă de producție și nu s-a modificat infrastructură externă. Aplicația nu implementează jobs/enqueue/status sau dispatch.
+
+### Etapa 2 — SQLite + enqueue intern (2026-10-11)
+
+- Migrația `0002_jobs_and_events.sql` adaugă tabelele `jobs`/`job_events`, constrângeri, indecși și trigger-e append-only; ștergerea joburilor este blocată pentru a păstra idempotency și secvența FIFO. Ledger-ul înregistrează checksum SHA-256.
+- `EnqueueRepository` validează operația/identitatea/payloadul, folosește RFC 8785 și SHA-256, UUIDv7 și tranzacția `BEGIN IMMEDIATE` pentru queue sequence FIFO, job și evenimentul `enqueued`.
+- Replay-ul cu aceeași identitate/hash întoarce jobul fără eveniment nou; hash diferit refuză fără modificări. Fiecare writer setează și verifică foreign keys, WAL, synchronous FULL și busy timeout. Ready/checksum/schema neconforme blochează enqueue înainte de scriere și se reverifică în tranzacție.
+- API-ul public `POST /v1/jobs`, status, workerul, dispatch-ul și orice conexiune externă rămân absente. Testul de rețea interzice explicit socket connect în timpul enqueue-ului.
+- Verificare locală: 24 teste PASS cu SQLite exclusiv în directoare temporare; `pip check` și `git diff --check` PASS. Dependințele au fost folosite din venv temporar; nu s-a creat DB persistentă și nu s-a pornit serviciu.
 
 ### Dezvoltare locală și teste izolate
 

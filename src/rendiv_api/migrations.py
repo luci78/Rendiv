@@ -19,6 +19,37 @@ class MigrationError(RuntimeError):
     """Raised when the database cannot be migrated safely."""
 
 
+def configure_write_connection(
+    connection: sqlite3.Connection,
+    *,
+    busy_timeout_ms: int,
+    enable_wal: bool = True,
+) -> None:
+    """Apply and verify required durability/locking pragmas for a writer."""
+
+    if not 0 <= busy_timeout_ms <= 60_000:
+        raise MigrationError("SQLite busy timeout is out of range")
+
+    connection.execute("PRAGMA foreign_keys = ON")
+    if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+        raise MigrationError("SQLite foreign key enforcement is not enabled")
+
+    connection.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
+    if connection.execute("PRAGMA busy_timeout").fetchone()[0] != busy_timeout_ms:
+        raise MigrationError("SQLite busy timeout was not applied")
+
+    if enable_wal:
+        mode = connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
+    else:
+        mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+    if str(mode).lower() != "wal":
+        raise MigrationError("SQLite WAL mode is not enabled")
+
+    connection.execute("PRAGMA synchronous = FULL")
+    if connection.execute("PRAGMA synchronous").fetchone()[0] != 2:
+        raise MigrationError("SQLite synchronous=FULL was not applied")
+
+
 @dataclass(frozen=True)
 class Migration:
     version: int
@@ -89,6 +120,52 @@ def _apply_sql(connection: sqlite3.Connection, migration: Migration) -> None:
         connection.execute(statement)
 
 
+def verify_migration_state(
+    connection: sqlite3.Connection,
+    *,
+    migration_directory: Path | None = None,
+) -> int:
+    """Require an exact, contiguous migration ledger for this source version."""
+
+    migrations = load_migrations(migration_directory)
+    if not _has_ledger(connection):
+        raise MigrationError("SQLite migration ledger is missing")
+    rows = connection.execute(
+        "SELECT version, name, checksum FROM schema_migrations ORDER BY version"
+    ).fetchall()
+    actual = {
+        int(version): (str(name), str(checksum))
+        for version, name, checksum in rows
+    }
+    expected = {
+        migration.version: (migration.name, migration.checksum)
+        for migration in migrations
+    }
+    if actual != expected:
+        raise MigrationError("SQLite migration state does not match this application")
+    if 2 in actual:
+        required_objects = {
+            ("table", "jobs"),
+            ("table", "job_events"),
+            ("index", "jobs_state_fifo"),
+            ("index", "jobs_source_created"),
+            ("index", "job_events_job_seq"),
+            ("trigger", "jobs_no_delete"),
+            ("trigger", "job_events_no_update"),
+            ("trigger", "job_events_no_delete"),
+        }
+        present_objects = {
+            (str(kind), str(name))
+            for kind, name in connection.execute(
+                "SELECT type, name FROM sqlite_master "
+                "WHERE type IN ('table', 'index', 'trigger')"
+            ).fetchall()
+        }
+        if not required_objects.issubset(present_objects):
+            raise MigrationError("SQLite jobs schema is incomplete")
+    return max(expected, default=0)
+
+
 def apply_migrations(
     database_path: Path,
     *,
@@ -116,10 +193,13 @@ def apply_migrations(
         raise MigrationError("unable to open SQLite database") from exc
 
     try:
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
-
         # Do not even change journal mode on an unmanaged or checksum-mismatched DB.
+        connection.execute("PRAGMA foreign_keys = ON")
+        if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+            raise MigrationError("SQLite foreign key enforcement is not enabled")
+        connection.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
+        if connection.execute("PRAGMA busy_timeout").fetchone()[0] != busy_timeout_ms:
+            raise MigrationError("SQLite busy timeout was not applied")
         has_ledger = _has_ledger(connection)
         if not has_ledger and _user_tables(connection):
             raise MigrationError("database has unmanaged tables; refusing migration")
@@ -142,10 +222,11 @@ def apply_migrations(
                     f"checksum or name mismatch for migration {version:04d}"
                 )
 
-        mode = connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
-        if str(mode).lower() != "wal":
-            raise MigrationError("SQLite did not enable WAL mode")
-        connection.execute("PRAGMA synchronous = FULL")
+        configure_write_connection(
+            connection,
+            busy_timeout_ms=busy_timeout_ms,
+            enable_wal=True,
+        )
 
         connection.execute("BEGIN IMMEDIATE")
         has_ledger = _has_ledger(connection)
@@ -188,7 +269,10 @@ def apply_migrations(
             applied[migration.version] = (migration.name, migration.checksum)
 
         connection.commit()
-        return max(applied, default=0)
+        return verify_migration_state(
+            connection,
+            migration_directory=migration_directory,
+        )
     except MigrationError:
         if connection.in_transaction:
             connection.rollback()
@@ -222,18 +306,15 @@ def database_is_ready(
     try:
         connection = sqlite3.connect(uri, uri=True, timeout=1)
         try:
-            rows = connection.execute(
-                "SELECT version, name, checksum FROM schema_migrations ORDER BY version"
-            ).fetchall()
-            applied = {
-                int(version): (str(name), str(checksum))
-                for version, name, checksum in rows
-            }
-            expected = {
-                migration.version: (migration.name, migration.checksum)
-                for migration in migrations
-            }
-            return applied == expected
+            connection.execute("PRAGMA foreign_keys = ON")
+            if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
+                return False
+            if str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower() != "wal":
+                return False
+            verify_migration_state(connection, migration_directory=migration_directory)
+            return True
+        except MigrationError:
+            return False
         finally:
             connection.close()
     except sqlite3.Error:

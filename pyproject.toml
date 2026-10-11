@@ -10,6 +10,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
   "fastapi>=0.115,<1",
   "pydantic>=2.9,<3",
+  "rfc8785>=0.1.4,<0.2",
   "starlette>=0.46,<1",
   "uvicorn>=0.30,<1",
 ]
