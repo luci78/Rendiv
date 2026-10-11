@@ -1,13 +1,13 @@
-"""Typed seam for a future Understory executor; this module has no transport.
+"""MCP tool protocol seam with an injected, non-network transport only.
 
-The request shape below is Rendiv's internal job envelope, not an Understory
-wire protocol. Only the operation allowlist is known; payload semantics remain
-opaque until the real Understory contract is confirmed.
+Argument names and interpretation follow docs/design/03-UNDERSTORY-CONTRACT.md.
+The JSON-RPC envelope is MCP framing; no HTTP or stdio client is implemented.
 """
 
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
@@ -17,11 +17,7 @@ from rendiv_api.worker import ExecutionResult, WorkerOutcome
 
 
 class AdapterInputError(ValueError):
-    """The worker job is outside Rendiv's confirmed generic contract."""
-
-
-class TransportFailure(Exception):
-    """A transport interruption whose remote effect cannot be established."""
+    """The operation arguments do not match the documented tool schema."""
 
 
 class Operation(StrEnum):
@@ -30,10 +26,9 @@ class Operation(StrEnum):
     MEMORY_MAINTAIN = "memory_maintain"
 
 
-class ResultClass(StrEnum):
+class EffectClassification(StrEnum):
     CONFIRMED_SUCCESS = "confirmed_success"
-    CONFIRMED_NO_EFFECT = "confirmed_no_effect"
-    UNCERTAIN = "uncertain"
+    UNKNOWN = "unknown"
     TIMEOUT = "timeout"
     TRANSPORT_ERROR = "transport_error"
     INVALID_RESPONSE = "invalid_response"
@@ -41,75 +36,154 @@ class ResultClass(StrEnum):
 
 @dataclass(frozen=True)
 class JobPayload:
-    """Generic operation and JSON object stored by Rendiv, without semantics."""
-
     operation: Operation
-    payload: dict[str, Any]
+    arguments: dict[str, Any]
 
 
 @dataclass(frozen=True)
-class TransportRequest:
-    """Internal injectable request. It does not specify network encoding."""
-
-    operation: Operation
-    payload: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class TransportResponse:
-    """Internal transport classification, not a presumed Understory response."""
-
-    classification: ResultClass
+class DecodedMcpResponse:
+    request_id: int
+    text: str
+    is_error: bool
 
 
-class InjectedTransport(Protocol):
-    """A caller supplied transport boundary; no concrete transport is provided."""
+class McpTransport(Protocol):
+    """Injectable serialized-message exchange; no concrete network transport."""
 
-    def execute(self, request: TransportRequest) -> TransportResponse: ...
+    def exchange(self, serialized_request: str) -> str: ...
 
 
 def validate_job(operation: str, payload: dict[str, Any]) -> JobPayload:
-    """Validate allowlisted operation and generic JSON-object payload only."""
+    """Validate only the three argument schemas documented for the MCP tools."""
 
     if not isinstance(operation, str) or operation not in OPERATIONS:
-        raise AdapterInputError("operation is not in Rendiv's confirmed allowlist")
+        raise AdapterInputError("operation is not in the documented allowlist")
     if not isinstance(payload, dict):
-        raise AdapterInputError("payload must be a JSON object")
+        raise AdapterInputError("arguments must be a JSON object")
     try:
         json.dumps(payload, allow_nan=False, ensure_ascii=False)
     except (TypeError, ValueError, OverflowError) as exc:
-        raise AdapterInputError("payload is not JSON-compatible") from exc
-    return JobPayload(Operation(operation), payload)
+        raise AdapterInputError("arguments are not JSON-compatible") from exc
+
+    allowed = {
+        Operation.MEMORY_ADD: {"content", "suggested_path"},
+        Operation.MEMORY_UPDATE: {"instruction"},
+        Operation.MEMORY_MAINTAIN: set(),
+    }[Operation(operation)]
+    if set(payload) - allowed:
+        raise AdapterInputError("arguments contain undocumented fields")
+    required = {
+        Operation.MEMORY_ADD: {"content"},
+        Operation.MEMORY_UPDATE: {"instruction"},
+        Operation.MEMORY_MAINTAIN: set(),
+    }[Operation(operation)]
+    if not required.issubset(payload):
+        raise AdapterInputError("required tool arguments are missing")
+    if any(not isinstance(payload[name], str) for name in required):
+        raise AdapterInputError("required tool arguments must be strings")
+    if "suggested_path" in payload and not isinstance(payload["suggested_path"], str):
+        raise AdapterInputError("suggested_path must be a string")
+    return JobPayload(Operation(operation), dict(payload))
+
+
+def serialize_tool_call(request_id: int, job: JobPayload) -> str:
+    """Serialize a standard MCP tools/call JSON-RPC request deterministically."""
+
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "tools/call",
+            "params": {"name": job.operation.value, "arguments": job.arguments},
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def decode_tool_result(serialized_response: str, expected_id: int) -> DecodedMcpResponse:
+    """Decode the MCP CallToolResult shape used by the documented handlers."""
+
+    try:
+        response = json.loads(serialized_response)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid JSON-RPC response") from exc
+    if not isinstance(response, dict) or response.get("jsonrpc") != "2.0":
+        raise ValueError("invalid JSON-RPC envelope")
+    if type(response.get("id")) is not int or response.get("id") != expected_id:
+        raise ValueError("MCP response id does not match request")
+    if "error" in response:
+        raise ValueError("MCP returned a JSON-RPC error")
+    result = response.get("result")
+    if not isinstance(result, dict):
+        raise ValueError("MCP result is missing")
+    is_error = result.get("isError", False)
+    content = result.get("content")
+    if not isinstance(is_error, bool) or not isinstance(content, list) or len(content) != 1:
+        raise ValueError("MCP tool result shape is invalid")
+    item = content[0]
+    if not isinstance(item, dict) or item.get("type") != "text" or not isinstance(
+        item.get("text"), str
+    ):
+        raise ValueError("MCP tool result content is invalid")
+    return DecodedMcpResponse(expected_id, item["text"], is_error)
+
+
+def classify_effect(response: DecodedMcpResponse) -> EffectClassification:
+    """Classify only outcomes supported by the observed response contract."""
+
+    if response.is_error:
+        # The source's failed outcome does not prove that no file was changed.
+        return EffectClassification.UNKNOWN
+    text = response.text
+    if text.startswith("⚠ Partial mutation:"):
+        return EffectClassification.UNKNOWN
+    if "Files changed:\n" not in text:
+        # Includes the healthy maintain no-op: worker has no successful no-op state.
+        return EffectClassification.UNKNOWN
+    changed = text.rsplit("Files changed:\n", 1)[1].strip()
+    if not changed or changed == "- none":
+        return EffectClassification.UNKNOWN
+    if not all(line.startswith("- ") and len(line) > 2 for line in changed.splitlines()):
+        return EffectClassification.UNKNOWN
+    # Non-empty changed paths are explicit evidence that write methods resolved.
+    return EffectClassification.CONFIRMED_SUCCESS
 
 
 class UnderstoryExecutorAdapter:
-    """Adapt injected transport classifications to the Stage 6A worker API."""
+    """Serialize a tool call, exchange through injection, and map to worker result."""
 
-    def __init__(self, *, transport: InjectedTransport) -> None:
-        if not callable(getattr(transport, "execute", None)):
-            raise TypeError("an injected transport with execute() is required")
+    def __init__(self, *, transport: McpTransport) -> None:
+        if not callable(getattr(transport, "exchange", None)):
+            raise TypeError("an MCP transport with exchange() must be injected")
         self._transport = transport
+        self._id_lock = threading.Lock()
+        self._next_id = 0
 
     def __call__(self, operation: str, payload: dict[str, Any]) -> ExecutionResult:
         job = validate_job(operation, payload)
-        request = TransportRequest(job.operation, job.payload)
+        with self._id_lock:
+            self._next_id += 1
+            request_id = self._next_id
+        request = serialize_tool_call(request_id, job)
         try:
-            response = self._transport.execute(request)
+            serialized_response = self._transport.exchange(request)
         except TimeoutError:
-            # A timeout says nothing about whether the remote effect occurred.
-            return ExecutionResult(WorkerOutcome.TIMEOUT)
-        except TransportFailure:
-            return ExecutionResult(WorkerOutcome.UNKNOWN)
+            return self._worker_result(EffectClassification.TIMEOUT)
+        except Exception:
+            return self._worker_result(EffectClassification.TRANSPORT_ERROR)
+        try:
+            decoded = decode_tool_result(serialized_response, request_id)
+        except (ValueError, TypeError):
+            return self._worker_result(EffectClassification.INVALID_RESPONSE)
+        classification = classify_effect(decoded)
+        return self._worker_result(classification)
 
-        if not isinstance(response, TransportResponse) or not isinstance(
-            response.classification, ResultClass
-        ):
-            return ExecutionResult(WorkerOutcome.UNKNOWN)
-        if response.classification is ResultClass.CONFIRMED_SUCCESS:
+    @staticmethod
+    def _worker_result(classification: EffectClassification) -> ExecutionResult:
+        if classification is EffectClassification.CONFIRMED_SUCCESS:
             return ExecutionResult(WorkerOutcome.SUCCEEDED)
-        if response.classification is ResultClass.CONFIRMED_NO_EFFECT:
-            return ExecutionResult(WorkerOutcome.FAILED_NO_EFFECT)
-        if response.classification is ResultClass.TIMEOUT:
+        if classification is EffectClassification.TIMEOUT:
             return ExecutionResult(WorkerOutcome.TIMEOUT)
-        # Uncertain, interrupted, ambiguous, and invalid responses all fail closed.
         return ExecutionResult(WorkerOutcome.UNKNOWN)

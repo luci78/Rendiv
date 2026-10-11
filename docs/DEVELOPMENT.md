@@ -192,6 +192,14 @@ Rollback-ul operat ulterior trebuie să folosească imaginea anterioară aprobat
 - Nu s-au găsit idempotency key, job ID/status sau mecanism de reconciliere. Timeouturile/anularea efectivă și potrivirea codului cu runtime rămân neconfirmate. `/api/chat`, dreamer, CLI și accesul filesystem sunt bypass-uri mutative în cod; activarea lor runtime nu a fost verificată.
 - S-au inspectat numai surse locale; fără teste, servicii, HTTP/MCP, Docker sau valori secrete. Nicio sursă Understory nu a fost modificată. Nu s-a implementat executorul real și Etapa 6B.2B nu a început.
 
+### Etapa 6B.2B — transport MCP simulat conform contractului (2026-10-11)
+
+- `rendiv_api.understory_adapter` validează arguments conform schemelor observate: `memory_add` (`content`, opțional `suggested_path`), `memory_update` (`instruction`) și `memory_maintain` (`{}`). Nu adaugă semantică sau câmpuri operației.
+- Apelul este serializat ca JSON-RPC `tools/call` și răspunsul `CallToolResult` este decodat de adaptor prin interfața injectată `McpTransport.exchange`. Nu există transport HTTP/stdio concret; fake-ul din teste este singurul peer.
+- `succeeded/complete` se permite numai pentru rezultat fără `isError`, fără marker partial și cu listă nevidă `Files changed`. `isError`, failed fără probă no-effect, partial, răspuns malformed, disconnect și ambiguitate devin `unknown`; timeoutul devine `timeout` executorului și workerul îl persistă ca `unknown`. Healthy no-op pentru maintain devine `unknown`, deoarece workerul/schema nu reprezintă no-op confirmat. Nu există dovadă no-effect în contract, deci adaptorul nu emite `FAILED_NO_EFFECT`.
+- Workerul 6A păstrează FIFO, flock, auditul atomic și recuperarea la crash; integrarea fake verifică unknown blocant și că restartul nu reexecută jobul.
+- Validarea a fost făcută numai cu peer in-memory și DB-uri temporare; fără conexiuni, servicii, Understory real, schema/migrații noi, schimbări API sau Compose. Contract real mașinabil, receipt, idempotency, lookup, no-effect și reconciliere rămân necesare înainte de integrarea reală.
+
 ### Dezvoltare locală și teste izolate
 
 Dependențele și versiunile folosite se instalează într-un mediu virtual local, nu ca serviciu permanent. Testele creează bazele SQLite sub `tmp_path` și nu cer Understory, Pithagoras sau acces la Docker.
