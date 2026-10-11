@@ -27,12 +27,15 @@ Aceste reguli se aplică întregului proiect și au prioritate pentru orice acti
 
 ## Rapoarte și analize Rendiv
 
-La orice cerere de raport, analiză, audit, investigație sau sinteză pentru proiectul Rendiv:
+### REGULĂ PERMANENTĂ — RAPOARTE CODEX
 
-- Salvează automat rezultatul într-un fișier Markdown potrivit din `docs/`.
-- Actualizează `docs/DEVELOPMENT.md` cu rezultatul și starea verificărilor.
-- Rulează `git diff --check`. Dacă verificările trec, fă automat commit și push către `origin/main`, incluzând numai documentația aferentă cererii.
-- Nu cere aprobare separată pentru salvarea sau publicarea acestei documentații.
-- Nu include secrete, credențiale, date sensibile, modificări preexistente sau modificări fără legătură.
-- Dacă push-ul eșuează, nu folosi force push; raportează eșecul.
-- Păstrează inspecțiile sistemelor și serviciilor investigate strict read-only și nu modifica alte repository-uri.
+La orice cerere de raport, analiză, audit sau investigație pentru Rendiv:
+
+1. Salvează rezultatul în `docs/LATEST-REPORT.md`, suprascriind integral raportul precedent.
+2. Păstrează în raport data, subiectul, constatările, dovezile, problemele și recomandările. Distinge faptele verificate de contextul furnizat, ipoteze și recomandări.
+3. Rulează automat `git diff --check`; dacă trece, fă commit și push pe `origin/main` numai pentru `docs/LATEST-REPORT.md`.
+4. Nu cere aprobare suplimentară pentru salvarea și publicarea raportului.
+5. Nu actualiza `docs/DEVELOPMENT.md` la fiecare raport; actualizează-l numai când există progres real de dezvoltare.
+6. Nu publica secrete, credențiale sau informații sensibile.
+7. Respectă restricțiile read-only asupra sistemelor și serviciilor investigate.
+8. Nu include modificări preexistente ori fără legătură, nu modifica alte repository-uri și nu folosi force push. Dacă push-ul eșuează, raportează eșecul.
