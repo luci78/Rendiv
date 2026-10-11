@@ -9,7 +9,7 @@ Aceste reguli se aplică întregului proiect și au prioritate pentru orice acti
 - Nu citi, copia, afișa sau include în documentație secrete, tokenuri, parole, chei API, fișiere `.env` ori configurații care le pot conține. Dacă o valoare secretă apare accidental, nu o reproduce.
 - Nu executa apeluri MCP care modifică date. Nu invoca `memory_add`, `memory_update`, `memory_maintain` sau operații echivalente.
 - Nu implementa bufferul/coada de procesare a memoriei până când utilizatorul nu cere explicit implementarea.
-- Nu face commit, push, deployment sau modificări în afara documentației Rendiv atunci când sarcina este documentară.
+- Nu face deployment. Pentru rapoarte și analize Rendiv, aplică regula de salvare și publicare automată de mai jos; pentru celelalte sarcini documentare, nu face commit sau push decât dacă utilizatorul cere explicit.
 
 ## Rigoare tehnică
 
@@ -24,3 +24,15 @@ Aceste reguli se aplică întregului proiect și au prioritate pentru orice acti
 
 - Nu rula teste, servicii, comenzi MCP sau operații de deployment decât dacă utilizatorul cere verificarea respectivă.
 - La final, raportează concis fișierele create/modificate și verificările efectuate. Oprește-te când sarcina cerută este îndeplinită.
+
+## Rapoarte și analize Rendiv
+
+La orice cerere de raport, analiză, audit, investigație sau sinteză pentru proiectul Rendiv:
+
+- Salvează automat rezultatul într-un fișier Markdown potrivit din `docs/`.
+- Actualizează `docs/DEVELOPMENT.md` cu rezultatul și starea verificărilor.
+- Rulează `git diff --check`. Dacă verificările trec, fă automat commit și push către `origin/main`, incluzând numai documentația aferentă cererii.
+- Nu cere aprobare separată pentru salvarea sau publicarea acestei documentații.
+- Nu include secrete, credențiale, date sensibile, modificări preexistente sau modificări fără legătură.
+- Dacă push-ul eșuează, nu folosi force push; raportează eșecul.
+- Păstrează inspecțiile sistemelor și serviciilor investigate strict read-only și nu modifica alte repository-uri.
