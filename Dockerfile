@@ -20,10 +20,7 @@ ENV VIRTUAL_ENV=/opt/venv \
     PYTHONUNBUFFERED=1 \
     HOME=/tmp
 
-RUN groupadd --gid 10001 rendiv \
-    && useradd --uid 10001 --gid 10001 --home-dir /home/rendiv \
-       --create-home --shell /usr/sbin/nologin rendiv \
-    && install -d --owner=10001 --group=10001 /app /var/lib/rendiv
+RUN python -c "import os; os.makedirs('/app', exist_ok=True); os.makedirs('/var/lib/rendiv', exist_ok=True); os.chown('/app', 10001, 10001); os.chown('/var/lib/rendiv', 10001, 10001)"
 
 COPY --from=dependencies /opt/venv /opt/venv
 COPY --chown=10001:10001 src/ /app/src/

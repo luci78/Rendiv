@@ -23,7 +23,7 @@ def test_dockerfile_is_multi_stage_pinned_and_non_root():
     assert "COPY requirements.lock ./requirements.lock" in dockerfile
     assert "pip install --no-cache-dir --no-deps -r requirements.lock" in dockerfile
     assert "pip check" in dockerfile
-    assert "useradd --uid 10001 --gid 10001" in dockerfile
+    assert "os.chown('/var/lib/rendiv', 10001, 10001)" in dockerfile
     assert "USER 10001:10001" in dockerfile
     assert '"--workers", "1"' in dockerfile
     assert package_lines
@@ -108,5 +108,5 @@ def test_operational_documentation_marks_container_commands_as_instructions_only
     development = _read("docs/DEVELOPMENT.md").lower()
     assert "etapa 4" in development
     assert "docker compose" in development
-    assert "nu a fost executată" in development
+    assert "nu rula în etapa de documentare" in development
     assert "rollback" in development
