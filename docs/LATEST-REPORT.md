@@ -1,36 +1,40 @@
-# Raport Etapa 5 — backup, recuperare și monitorizare Rendiv
+# Raport Checkpoint 5A — validare runtime backup și restore Rendiv
 
 - **Data:** 2026-10-11
-- **Subiect:** Implementare izolată a backupului SQLite, verificării/restaurării și monitorizării read-only
-- **Repository înainte de lucru:** curat la commitul `a702436` (`Validate Rendiv Stage 4 Docker checkpoint`). Schema curentă verificată în cod: migrațiile versionate `0001_bootstrap` și `0002_jobs_and_events`; nu au fost modificate migrații istorice.
-- **Domeniu:** Numai fișiere Rendiv. Testele au folosit DB SQLite temporare. Nu s-au executat Docker/Compose, servicii permanente, deployment, inferențe sau apeluri MCP; nu s-au accesat DB/volume reale ori sisteme externe.
+- **Subiect:** Validare Docker izolată a backupului SQLite, verificării, restaurării și monitorizării Etapei 5
+- **Repository înainte de lucru:** curat la `23bd766` (`Add Rendiv SQLite backup and monitoring`). Schema verificată: migrațiile `0001_bootstrap` și `0002_jobs_and_events`, schema version 2. Nicio migrație istorică nu a fost modificată.
+- **Domeniu:** Exclusiv Rendiv și resurse Docker temporare unice. Nu s-au accesat baze/volume reale, nu s-a făcut deployment și nu s-au atins Pithagoras, Understory, llama.cpp, Home Assistant sau alte servicii.
 
-## Implementare verificată în cod
+## Preflight și izolare
 
-- `rendiv_api.backup` folosește `sqlite3.Connection.backup()` (SQLite Online Backup API), inclusiv pentru sursă în WAL. Verifică sursa și copia cu `integrity_check`, `foreign_key_check`, checksum-urile exacte ale migrațiilor aplicate și structura tabelelor/coloanelor așteptate.
-- Backupul este generat într-un temporar cu permisiuni `0600`, în directorul destinației. După verificare și fsync este publicat atomic prin hard link fără înlocuirea unei destinații existente. Temporarele sunt curățate la eșec. Destinația trebuie să fie absolută, nouă, să aibă director părinte existent, iar filesystemul trebuie să permită hard link și fsync în acel director.
-- Comenzile `python -m rendiv_api.backup create SOURCE DESTINATION`, `verify BACKUP` și `restore BACKUP NEW_DATABASE` raportează rezultat generic și sumar fără payload, credentiale, principal sau ID-uri individuale. Tokenurile API sunt configurate din environment, nu în schema SQLite.
-- Restaurarea verifică sursa înainte de copiere, restaurează prin Online Backup API într-un fișier temporar pe calea explicită, absolută și neexistentă, verifică rezultatul înainte și după publicare și refuză suprascrierea. Nu schimbă starea joburilor și nu modifică DB activă.
-- `read_monitoring_snapshot()` deschide baza cu `mode=ro` și `PRAGMA query_only=ON`. Returnează contoare agregate per stare, backlog, cel mai vechi timestamp queued, număr unknown și ultima activitate din `job_events`. Nu adaugă endpoint HTTP sau administrativ și nu expune payloaduri, hash-uri, principals ori ID-uri de job.
-- Rezultatul backup/verify/restore indică agregat joburile `running` și `unknown`. Niciun retry sau dispatch nu este implementat. Joburile `running` găsite după crash nu se reexecută automat; `unknown` cere reconciliere umană bazată pe dovezi. Timeoutul singur nu demonstrează că operația Understory a eșuat.
+- Docker CLI/daemon: 29.8.2; Docker Compose: 5.6.0. Inventarele inițiale de containere, rețele, volume și imagini au fost înregistrate înainte de creare; proiectul `rendiv-5a-mv40znicmptf4j` și tag-ul `rendiv-cp5a:mv40znicmptf4j` nu existau.
+- Configurația Compose randată a avut un singur serviciu API, fără porturi publicate, fără socket Docker și fără rețele existente. Rețeaua dedicată `rendiv-5a-mv40znicmptf4j_rendiv-private` era internă. Volumele dedicate au fost `rendiv-5a-mv40znicmptf4j-data`, `rendiv-5a-mv40znicmptf4j-backup` și `rendiv-5a-mv40znicmptf4j-restore`.
+- Buildul imaginii Rendiv de test a trecut cu dependențele blocate. A necesitat internet pentru imaginea de bază și descărcarea pachetelor. Python 3.12.15 slim Bookworm s-a rezolvat în acest build la digestul observat `sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258`; referința OCI din configurație nu este fixată prin digest.
+- Inspectarea containerului a confirmat UID/GID `10001:10001`, root filesystem read-only, fără port host și numai mount-urile RW dedicate. Rețeaua internă conținea doar containerul testului.
 
-## Teste și dovezi
+## Rezultate runtime
 
-- Suite completă Etapele 1–5: **53 PASS** cu Python 3.12.3 și SQLite temporar.
-- `pip check`: **PASS**, fără dependențe incompatibile, în `/tmp/rendiv-stage1-venv`.
-- `git diff --check`: **PASS**.
-- Testele Etapei 5 acoperă sursă WAL și tranzacție scriitoare concurentă necomisă în timpul backupului, consistența snapshotului, restore și verificare, date corupte, checksum migrare invalid, DB lipsă, destinație existentă, refuz de permisiune injectat, lipsa suprascrierii, monitorizare fără schimbarea rândurilor și interdicția apelurilor externe prin socket.
-- Toate artefactele DB sunt create în directoare temporare ale testelor. Nu a fost creată DB persistentă. Nu s-au instalat dependențe globale.
+- Au fost create două joburi sintetice prin API cu bearer fictiv. POST a răspuns queued, GET a expus doar metadate. Containerul API a fost recreat cu același volum de date; readiness a trecut, replay-ul ambelor cereri a identificat joburile existente, iar statusurile au persistat ca queued.
+- Mecanismul real `rendiv_api.backup` a creat backupul din DB activă prin SQLite Online Backup API, în volumul separat. Comenzile `create`, `verify`, `restore` într-un volum de restore distinct și verificarea bazei restaurate au trecut. Sursa, backupul și restore-ul au avut schema/checksum de migrații identice și același conținut logic: schema 2, două joburi queued și două evenimente de audit.
+- Monitorizarea read-only a raportat queued=2, backlog=2 și unknown=0. Hashurile logice ale schemei, joburilor și evenimentelor înainte și după citirea monitorizării au coincis; baza nu s-a modificat.
+- Teste negative sub UID/GID 10001: backup corupt refuzat cu eroare controlată; restaurarea către destinație existentă refuzată fără alterarea octeților existenți; permisiuni de scriere revocate au făcut create și restore să eșueze fără publicarea unui fișier; DB absentă a produs eroare controlată pentru backup și monitorizare.
+- Nu au fost afișate tokenuri, payloaduri sau ID-uri individuale. Nu au avut loc apeluri externe sau operații AI.
 
-## Limitări și aprobări necesare înainte de producție
+## Cleanup și verificări
 
-- Testul de permisiuni inserează controlat o eroare `PermissionError` la crearea temporarului; permisiunile filesystemului real și comportamentul pe volumul de producție nu au fost verificate.
-- Backupul conține integral DB, inclusiv payloadurile joburilor. Deși tokenurile de serviciu nu sunt stocate în SQLite, callerii trebuie să evite introducerea credențialelor în payload. Copiile necesită control de acces OS, criptare la rest, rotație/retentie și o destinație off-host aprobate.
-- Calea și filesystemul de producție, suportul pentru hard link/fsync, capacitatea, frecvența backupului, RPO/RTO, retenția, responsabilul de recuperare și testul periodic de restore necesită aprobare. Nicio valoare operațională nu a fost inventată.
-- Monitorizarea este o funcție internă read-only, nu un endpoint și nu un exporter. Pragurile, alertele, paging-ul și conectarea la sistemul de monitorizare necesită decizie separată.
-- Restore-ul nu mută automat `running` la `unknown`; funcționalitatea de tranziții/reconciliere nu există încă. Înainte de activarea oricărui worker viitor, operatorul trebuie să oprească dispatch-ul, să clasifice `running` ca rezultat incert prin procedura auditată aprobată și să reconcilieze `unknown` cu dovezi. Această etapă nu implementează tranziții, worker sau cutover.
-- Nicio schimbare de infrastructură, deployment ori integrare Pithagoras/Understory/Home Assistant/llama.cpp nu a fost efectuată.
+- Au fost eliminate numai containerul și rețeaua proiectului unic, cele trei volume de test și imaginea `rendiv-cp5a:mv40znicmptf4j`, prin `docker compose down --volumes --remove-orphans` scoped la proiect și `docker image rm` pe tag-ul temporar. Verificarea după cleanup a găsit zero resurse cu prefixul unic. Fișierele temporare locale din `/tmp/rendiv-5a-mv40znicmptf4j` au fost eliminate.
+- Inventarul Docker post-test a corespuns inventarului inițial pentru containere, rețele, volume și imagini; nu s-au folosit comenzi prune și nu s-au șters resurse existente.
+- Suita completă Etapele 1–5: **53 teste PASS** (Python 3.12.3).
+- `pip check`: **PASS**, fără dependențe incompatibile în venv temporar.
+- `git diff --check`: **PASS** înaintea actualizării raportului; verificarea finală se rulează după documentare.
+
+## Limite și decizii înainte de producție
+
+- Nu au fost validate backupurile persistente reale, retenția/rotația, criptarea la rest, destinația off-host, accesul OS, frecvența, RPO/RTO sau restaurarea pe filesystemul de producție. Acestea necesită decizie și aprobare operațională.
+- Digestul OCI nu este fixat în Dockerfile/Compose; digestul menționat este numai cel observat pentru buildul acestui checkpoint. Buildul offline nu a fost demonstrat și testul a folosit internet.
+- Testul nu a făcut deployment și nu a creat directoare ori baze persistente pe VM. Backupul și restore-ul au existat numai în volume temporare dedicate, eliminate după test.
+- `running`/`unknown` nu au fost generate prin worker; nu există worker sau reconciliere automată. Joburile `running` restaurate după crash nu se reexecută automat, iar `unknown` necesită reconciliere umană pe bază de dovezi înaintea oricărei mutații.
 
 ## Recomandare
 
-Înainte de folosirea producției, aprobă locația și protecția copiilor, verifică suportul filesystemului pentru publicarea atomică și repetă un ciclu backup–verify–restore pe o copie izolată a configurației reale. Nu activa workerul până când orice job `running`/`unknown` restaurat nu a fost reconciliat și auditat.
+Înainte de producție, aprobă retenția, criptarea, destinația și controlul accesului backupurilor, RPO/RTO și responsabilul de recuperare; fixează imaginea după digest și validează un build offline. Rulează apoi un restore controlat pe o copie izolată a configurației aprobate. Acest checkpoint nu începe Etapa 6.
