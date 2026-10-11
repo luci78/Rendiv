@@ -9,6 +9,7 @@
 | 3. Proiectarea cozii | Schema persistentă, priorități, serializare, recovery, verificarea după timeout și politica anti-duplicate | Neîncepută |
 | 4. Implementarea bufferului Rendiv | Acceptare asincronă, procesare serială și integrare cu sistemele sursă/destinație | Neîncepută; nu este autorizată în această etapă |
 | 5. Backup, recuperare și monitorizare | Online backup SQLite, verificare/restaurare izolată și agregate read-only | Încheiată local; numai DB temporare, fără deployment |
+| 6A. Worker local simulat | Claim FIFO serial, tranziții și audit atomic cu executor fictiv | Încheiată local; workerul nu pornește automat și nu apelează sisteme externe |
 
 La inițializarea documentară, etapele de implementare 2–5 nu fuseseră executate. Progresul curent al codului este urmărit separat mai jos.
 
@@ -48,6 +49,7 @@ La inițializarea documentară, etapele de implementare 2–5 nu fuseseră execu
 | 3. API autentificat | Enqueue/status, bearer per principal, limite și ACL | Încheiată local; fără deployment sau integrare externă |
 | 4. Containerizare izolată | Imagine non-root, Compose intern, volum configurabil și instrucțiuni de operare | Validată în proiect Docker temporar; fără deployment |
 | 5. Backup și observabilitate | Online backup/verificare/restaurare și agregate read-only | Încheiată local; fără endpoint de administrare sau deployment |
+| 6A. Worker local simulat | Claim FIFO serial, audit și stări conservatoare prin executor injectat | Încheiată local; fără executor real, API startup sau deployment |
 
 ### Etapa 1 — schelet API (2026-10-11)
 
@@ -148,6 +150,18 @@ Rollback-ul operat ulterior trebuie să folosească imaginea anterioară aprobat
   În container, backupul, verificarea și restore-ul au folosit `python -m rendiv_api.backup create /var/lib/rendiv/rendiv.sqlite3 /checkpoint/backup/checkpoint.sqlite3`, `python -m rendiv_api.backup verify /checkpoint/backup/checkpoint.sqlite3`, `python -m rendiv_api.backup restore /checkpoint/backup/checkpoint.sqlite3 /checkpoint/restore/restored.sqlite3` și apoi `python -m rendiv_api.backup verify /checkpoint/restore/restored.sqlite3`. Fișierul env cu bearer fictiv nu a fost inclus în repository sau raport.
 - Verificare locală după runtime: 53 teste PASS, `pip check` PASS și `git diff --check` PASS în `/tmp/rendiv-stage1-venv`. Nicio bază reală, volum existent sau serviciu extern nu a fost accesat; nu s-a făcut deployment.
 - Înainte de producție rămân deschise retenția/rotația, criptarea la rest, locația aprobată/off-host și controlul accesului la backup, RPO/RTO și responsabilul de recuperare, pinning OCI după digest și validarea buildului offline. Checkpointul nu testează retenția, criptarea, locația de producție, RPO/RTO, filesystemul ori volumul persistent real.
+
+### Etapa 6A — worker local simulat (2026-10-11)
+
+- S-a adăugat `rendiv_api.worker.LocalWorker`, pornit exclusiv prin apel explicit. API-ul, lifespan-ul FastAPI, Dockerfile și Compose nu importă și nu pornesc workerul. Nu există executor real; constructorul cere un executor injectat.
+- Workerul procesează după `queue_seq` și revendică fiecare job într-o tranzacție `BEGIN IMMEDIATE`: verifică migrațiile, lipsa altui `running`/`unknown`, schimbă `queued -> running` și adaugă `worker_claimed` în același COMMIT. Toate tranzițiile și evenimentele aferente sunt validate și comise atomic; trigger-ele append-only existente rămân active.
+- Workerii coordonează execuția prin fișier lock privat adiacent DB (`*.worker.lock`) cu `flock(LOCK_EX|LOCK_NB)` POSIX ținut pe durata executorului. Lock imposibil de verificat/obținut ori un `running` neașteptat oprește procesarea. Garanția presupune filesystem POSIX local cu locking fiabil și ca toți workerii Rendiv să respecte același lock; nu este garanție cross-host/NFS.
+- La pornire, sub lock, orice `running` rămas devine `unknown` cu `effect_certainty=unknown` și eveniment `recovered_running_as_unknown`. Orice `unknown` blochează întreaga coadă. Timeoutul, rezultatul ambiguu și excepțiile executorului produc `unknown`; nu există retry sau reconciliere automată. Numai rezultatul explicit `FAILED_NO_EFFECT` produce `failed/none`; succesul confirmat produce `succeeded/complete`.
+- Executorul și rezultatele sunt interfețe locale injectate. Testele folosesc exclusiv executor fictiv; crash-ul este reprezentat prin excepție de tip `BaseException` care lasă jobul `running`, pentru a verifica recuperarea la următoarea pornire. Codul nu deschide socketuri și nu apelează MCP sau servicii externe.
+- Nu s-a adăugat migrație: schema implementată v2 susține stările și auditul. `worker_gate` și `job_attempts` menționate în design rămân propuneri, nu tabele existente; coordonarea acestei etape folosește lock file și verificări SQLite. Backup/restore și API status au fost verificate asupra jobului procesat.
+- Dovezi de examinat înaintea oricărei reconcilieri viitoare: istoricul append-only al jobului și timestampurile claim/result; confirmarea dacă requestul a părăsit workerul; răspunsul/correlation ID-ul destinației dacă există; auditul Understory privind efectele, inclusiv scrieri parțiale; și confirmarea că operația nu mai rulează. Timeoutul sau lipsa răspunsului singure nu dovedesc no-effect. Dacă probele nu sunt decisive, jobul rămâne `unknown`, iar coada rămâne blocată. Nicio tranziție manuală nu este implementată în 6A.
+- Verificare: toate cele 65 teste PASS cu Python 3.12.3 și SQLite temporar; `pip check` PASS; `git diff --check` PASS. Fără Docker/Compose, servicii permanente, DB de producție, migrații noi, instalări globale sau integrare AI.
+- Limitări: workerul este un harness local cu executor fictiv, nu un proces supervisat; nu are retry, reconciliere, lease/heartbeat, metadate attempts sau interfață operator. Lockul depinde de filesystem POSIX local și cooperarea tuturor workerilor. Executorul real, serializarea între hosturi, gate persistent în DB și procedura umană de reconciliere rămân în afara 6A.
 
 ### Dezvoltare locală și teste izolate
 
