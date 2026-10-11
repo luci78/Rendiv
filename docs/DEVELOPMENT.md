@@ -8,7 +8,7 @@
 | 2. Confirmarea contractelor | Verificarea API-urilor MCP, timeouturilor efective, statusului operațiilor și posibilităților de deduplicare | Neîncepută; analiza de cod este documentată, verificările runtime lipsesc |
 | 3. Proiectarea cozii | Schema persistentă, priorități, serializare, recovery, verificarea după timeout și politica anti-duplicate | Neîncepută |
 | 4. Implementarea bufferului Rendiv | Acceptare asincronă, procesare serială și integrare cu sistemele sursă/destinație | Neîncepută; nu este autorizată în această etapă |
-| 5. Verificare și operare | Validarea comportamentului, monitorizare, retry și proceduri de recuperare | Neîncepută |
+| 5. Backup, recuperare și monitorizare | Online backup SQLite, verificare/restaurare izolată și agregate read-only | Încheiată local; numai DB temporare, fără deployment |
 
 La inițializarea documentară, etapele de implementare 2–5 nu fuseseră executate. Progresul curent al codului este urmărit separat mai jos.
 
@@ -47,7 +47,7 @@ La inițializarea documentară, etapele de implementare 2–5 nu fuseseră execu
 | 2. SQLite + enqueue | Persistență joburi, idempotency și audit | Încheiată local; numai strat intern, fără rută publică |
 | 3. API autentificat | Enqueue/status, bearer per principal, limite și ACL | Încheiată local; fără deployment sau integrare externă |
 | 4. Containerizare izolată | Imagine non-root, Compose intern, volum configurabil și instrucțiuni de operare | Validată în proiect Docker temporar; fără deployment |
-| 5. Backup și observabilitate | Proceduri și metrici | Neîncepută |
+| 5. Backup și observabilitate | Online backup/verificare/restaurare și agregate read-only | Încheiată local; fără endpoint de administrare sau deployment |
 
 ### Etapa 1 — schelet API (2026-10-11)
 
@@ -110,6 +110,17 @@ Rollback-ul operat ulterior trebuie să folosească imaginea anterioară aprobat
 - Verificare finală: 43 teste PASS, `pip check` PASS și `git diff --check` PASS în `/tmp/rendiv-stage1-venv`.
 - Limitări înainte de deployment: tag-ul Python fixează versiunea 3.12.15, dar referința OCI nu este fixată prin digest; lockfile-ul fixează versiunile, nu hash-urile artefactelor. Buildul offline nu este demonstrat și buildul observat a necesitat internet. Nu au fost validate volume reale, ownership pe VM, conectivitatea callerilor, TLS/proxy, backup/restore sau servicii externe. `docker inspect` a confirmat UID, read-only, port bindings și mount-uri; formatul local folosit pentru citirea restart policy a eșuat la funcția Go-template indisponibilă, deci politica rămâne confirmată numai în configurația Compose (`unless-stopped`).
 
+### Etapa 5 — backup, recuperare și monitorizare (2026-10-11)
+
+- `rendiv_api.backup` oferă `create_backup`, `verify_database` și `restore_backup`, plus comenzi locale `python -m rendiv_api.backup create|verify|restore`. Copia folosește `sqlite3.Connection.backup()` din SQLite Online Backup API, astfel încât snapshot-ul include tranzacțiile WAL confirmate fără copiere directă a fișierului activ.
+- Backupul verifică DB sursă, creează un fișier temporar cu permisiuni `0600` în directorul destinației, efectuează backupul online, rulează `PRAGMA integrity_check`, `foreign_key_check`, checksum-urile migrațiilor și validarea tabelelor/coloanelor așteptate. Apoi face fsync și publică atomic prin hard link fără înlocuirea destinației existente; sistemul de fișiere al destinației trebuie să permită hard link în același director. Eșecurile sunt raportate cu mesaje generice fără valori din DB.
+- Restaurarea cere o cale absolută, nouă și neexistentă. Validează backupul înainte, îl copiază prin aceeași API SQLite într-un temporar, validează rezultatul și îl publică fără suprascriere. Nu modifică baza activă, nu pornește servicii și nu transformă stările joburilor. Rezultatul CLI arată numai numărul joburilor per stare; valorile `running`/`unknown` cer reconciliere umană bazată pe dovezi înainte de orice worker viitor. Nu se face retry automat; timeoutul nu demonstrează eșecul operației Understory.
+- `rendiv_api.monitoring.read_monitoring_snapshot()` deschide DB cu `mode=ro` și `PRAGMA query_only=ON`; returnează agregat numărul joburilor pe fiecare stare, backlogul, timestampul celui mai vechi job queued, numărul `unknown` și ultima activitate din audit. Nu există endpoint HTTP nou și rezultatul nu conține payload, hash, principal sau ID individual.
+- Teste izolate includ WAL și tranzacție de scriere necomisă în timpul backupului, restaurare, integritate, backup corupt, destinație existentă, checksum de migrare invalid, DB inexistentă, eroare simulată de permisiuni, fără suprascriere, monitorizare fără schimbarea datelor și blocarea apelurilor externe prin socket. Toate testele folosesc fișiere `tmp_path`; nu s-au accesat DB/volume reale sau Docker.
+- Acceptanță locală: 53 teste PASS, `pip check` PASS și `git diff --check` PASS cu `/tmp/rendiv-stage1-venv`. Nu au fost instalate dependențe globale și nu s-au pornit servicii.
+- Înainte de producție necesită aprobare/verificare: director și filesystem local care suportă hard link și fsync; backup off-host, criptare la rest, retenție/rotație, acces OS, RPO/RTO și owner; test restore periodic; volum/capacitate și drepturi reale. Endpointul privat de metrici, pragurile/alertele și integrarea cu monitorizarea rămân neimplementate și neaprobate. Backupul include payloadurile deja păstrate în DB; tokenurile API sunt configurate din environment, nu în schema DB, iar politica de a preveni callerii să includă date secrete în payload rămâne necesară înainte de date reale.
+- Runbook-ul de operare pentru backup/restaurare este documentat după comenzile de development de mai jos; aceste comenzi nu au fost executate pe vreo bază persistentă.
+
 ### Dezvoltare locală și teste izolate
 
 Dependențele și versiunile folosite se instalează într-un mediu virtual local, nu ca serviciu permanent. Testele creează bazele SQLite sub `tmp_path` și nu cer Understory, Pithagoras sau acces la Docker.
@@ -127,6 +138,26 @@ RENDIV_APP_ENV=development \
 RENDIV_DATABASE_PATH=/tmp/rendiv-development.sqlite3 \
 PYTHONPATH=src .venv/bin/uvicorn rendiv_api.app:create_app --factory
 ```
+
+### Runbook operator backup și recuperare (instrucțiuni, neexecutate)
+
+Aceste comenzi sunt doar procedură pentru o fereastră de mentenanță aprobată; nu au fost executate pe DB persistentă. Destinațiile trebuie alese explicit ca path-uri absolute noi. Backupul conține integral datele din DB, inclusiv payloadurile joburilor, deci trebuie protejat ca datele sursă. Tokenurile API sunt environment-only și nu fac parte din schema Rendiv.
+
+```sh
+# Înlocuiește valorile cu locații aprobate; BACKUP_PATH trebuie să nu existe.
+BACKUP_PATH="/absolute/approved/backup/rendiv-YYYYMMDDTHHMMSSZ.sqlite3"
+PYTHONPATH=src python -m rendiv_api.backup create \
+  "$RENDIV_DATABASE_PATH" "$BACKUP_PATH"
+PYTHONPATH=src python -m rendiv_api.backup verify "$BACKUP_PATH"
+
+# Recuperarea scrie doar în alt path absolut, nou și neexistent.
+RESTORE_PATH="/absolute/approved/recovery/rendiv-YYYYMMDDTHHMMSSZ.sqlite3"
+PYTHONPATH=src python -m rendiv_api.backup restore \
+  "$BACKUP_PATH" "$RESTORE_PATH"
+PYTHONPATH=src python -m rendiv_api.backup verify "$RESTORE_PATH"
+```
+
+Revizuiește codurile de stare agregate din rezultat. `running` găsit după un crash nu se reexecută automat; `unknown` cere reconciliere umană bazată pe dovezi și nu se requeue-uiește pe baza timeoutului singur. Etapa 5 nu implementează schimbări de stare sau worker. Nu redirecționa serviciul activ către restaurare până la o aprobare și un plan separat de cutover/rollback. Păstrează sursa și backupul pentru investigație; frecvența, retenția, locația off-host, criptarea, RPO/RTO și responsabilul de recuperare necesită aprobare înainte de producție.
 
 
 ## Etapă de documentare: analiza Pithagoras–Understory
