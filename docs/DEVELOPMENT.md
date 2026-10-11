@@ -5,7 +5,7 @@
 | Etapă | Rezultat urmărit | Stare |
 |---|---|---|
 | 1. Documentarea sistemului | Reguli Codex, arhitectură cunoscută/neconfirmată și plan de lucru | Încheiată prin această inițializare |
-| 2. Confirmarea contractelor | Verificarea API-urilor MCP, timeouturilor efective, statusului operațiilor și posibilităților de deduplicare | Neîncepută |
+| 2. Confirmarea contractelor | Verificarea API-urilor MCP, timeouturilor efective, statusului operațiilor și posibilităților de deduplicare | Neîncepută; analiza de cod este documentată, verificările runtime lipsesc |
 | 3. Proiectarea cozii | Schema persistentă, priorități, serializare, recovery, verificarea după timeout și politica anti-duplicate | Neîncepută |
 | 4. Implementarea bufferului Rendiv | Acceptare asincronă, procesare serială și integrare cu sistemele sursă/destinație | Neîncepută; nu este autorizată în această etapă |
 | 5. Verificare și operare | Validarea comportamentului, monitorizare, retry și proceduri de recuperare | Neîncepută |
@@ -38,3 +38,13 @@ Etapele 2–5 nu au fost executate. Această sarcină a creat doar documentație
 - Separată prioritatea inferenței conversaționale Pithagoras față de Understory de ordinea loturilor din coadă, care rămâne nedecisă.
 - Înregistrată verificarea runtime Understory prin `docker inspect`, precum și faptul că runtime-ul Pithagoras nu a fost reverificat în această etapă.
 - Marcată investigarea detectării activității llama.cpp drept lucru deschis; nu se afirmă că este deja implementată.
+
+
+## Etapă de documentare: analiza Pithagoras–Understory
+
+- Creat `docs/PITHAGORAS-UNDERSTORY-ANALYSIS.md` cu arhitectura observată în cod, dovezi, riscuri, verificări runtime rămase și propunerea de coadă pentru Rendiv.
+- Confirmat în cod: Pithagoras expune tool-urile MCP Understory direct; coada `exclusive` din serviciul portalului nu acoperă apelurile directe; programarea de dreaming este timer în proces; SQLite și supervisorul de routines sunt mecanisme existente ce pot informa proiectarea.
+- Separată starea unui tur Pithagoras de activitatea unei inferențe; contorul global al inferențelor către llama.cpp nu este confirmat ca implementat.
+- Valorile endpoint/model comun au fost furnizate de utilizator și sunt consemnate în arhitectură; runtime-ul Pithagoras și timeoutul MCP efectiv rămân de verificat. Configurația Understory consemnată anterior nu a fost reverificată în această etapă.
+- Recomandarea păstrează coada în Rendiv, serializează scrierile și joburile de noapte, răspunde asincron cu ID de job, închide căile MCP directe de scriere și marchează timeout/restart ca rezultat incert fără retry automat.
+- Nicio implementare, modificare Pithagoras/Understory, operație de memorie, test sau acces la serviciu activ nu a fost efectuat în această etapă.
