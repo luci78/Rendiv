@@ -1,42 +1,43 @@
-# Raport Rendiv — Checkpoint 6B.2C: aplicarea deciziilor privind certitudinea efectelor
+# Raport Rendiv — Checkpoint 6B.2D: audit read-only al contractului Understory
 
 Data: 2026-10-11
 
 ## Subiect și domeniu
 
-Au fost aplicate deciziile operatorului din checkpointul 6B.2C adaptorului Understory simulat și workerului local Rendiv. Auditul complet și matricea pentru cele trei operații sunt în `docs/design/04-EFFECT-CERTAINTY-AUDIT.md`.
+Audit static al contractului local Understory pentru `memory_add`, `memory_update` și `memory_maintain`, cu accent pe dovezile efectelor și pe limitele clasificării Rendiv. Raportul detaliat, cu referințe exacte la fișiere și funcții, este `docs/design/05-UNDERSTORY-CONTRACT-AUDIT.md`.
 
-Lucrul a fost local, cu transport fake/in-memory și SQLite temporar. Nu s-a folosit Docker, transport HTTP/MCP/stdio real, Understory, Pithagoras, Home Assistant, llama.cpp sau servicii active. Nu s-au accesat secrete.
+Sursa locală inspectată: `/home/luci78/ai-stack/understory`, commit `f6c342332f390a444a8669636b1cf8f9669dd995`, curată la verificarea read-only. Acest commit nu confirmă codul sau configurația serviciului activ.
 
-## Decizii aplicate și efect
+## Constatări confirmate în sursa locală
 
-- `changed_paths` este succes raportat de Understory, nu dovadă de durabilitate și nici read-back Rendiv. Adaptorul îl lasă `unknown/unknown`, cu eveniment audit `worker_uncertain` și `reason_code=reported_success_unverified`. Jobul blochează FIFO; read-back-ul suplimentar nu este prezentat ca garanție tranzacțională.
-- Workerul convertește `FAILED_NO_EFFECT` fără dovadă structurată și verificabilă în `unknown/unknown`, cu `reason_code=no_effect_unproven`. Simpla valoare enum nu produce `failed/none`. Interfața și contractul local nu conțin acum format sau verificator de proof; nicio dovadă ipotetică nu a fost introdusă.
-- Healthy no-op pentru `memory_maintain` poate fi succes terminal `succeeded/complete` doar pe baza unui răspuns explicit, neambiguu și validabil care confirmă finalizarea fără modificări. Contractul local descrie calea no-op, dar nu oferă un marker textual stabil pentru adaptor. Răspunsul actual fără căi rămâne `unknown/unknown`, cu `reason_code=maintain_response_unverified`, și blochează FIFO.
-- ID-ul UUID per apel JSON-RPC este păstrat numai pentru corelarea răspunsului, nu ca idempotency.
+- `memory_add` acceptă `content` și opțional `suggested_path`; `memory_update` acceptă `instruction`; `memory_maintain` primește obiect gol. Primele două trec prin agentul intern și tool-uri de scriere KB.
+- `ok` și `Files changed` constituie succes raportat. Paths înregistrate nu sunt manifest complet și nu dovedesc commit durabil. Scrierea conceptului poate preceda eșecul regenerării indexului sau logului, iar callback-ul poate raporta listă goală în acea situație.
+- Pentru codul local, `memory_maintain` are markerul exact healthy no-op `Memory is healthy — N concepts, N links, no orphans, no broken links. Nothing to repair.` Ramura face lint read-only și revine fără `runMutation`. Markerul este dovadă la nivelul acelei versiuni de cod numai când răspunsul complet este valid și corelat. Adaptorul Rendiv actual nu îl recunoaște, deci persistă `unknown`.
+- `failed`, `isError` sau paths goale nu demonstrează absența efectului; `FAILED_NO_EFFECT` nu poate fi justificat fără dovadă structurată și verificabilă.
+- În traseul inspectat nu există operation ID/status durabil, idempotency upstream, revision per mutație, tranzacție multi-fișier sau receipt de commit. Read-back-ul poate observa conținut curent, dar nu dovedește operația care l-a produs ori durabilitatea.
+- Codul nu configurează timeout explicit pentru mutație și nu propagă anularea la `runMutation`. Fallback-ul de model poate repeta generarea în unele condiții, dar nu oferă idempotency mutației. Timeoutul, retry-urile SDK/provider și comportamentul runtime rămân neconfirmate.
 
-## Compatibilitate arhitecturală și impact
+## Metodă și limitări
 
-Modelul existent poate exprima aceste rezultate fără migrare sau schimbare API: starea `unknown` păstrează incertitudinea, iar `job_events.reason_code` păstrează cauza fără date de payload. Nu s-au schimbat schema, migrațiile, endpointurile publice, enum-ul stărilor sau Compose.
+Au fost citite sursele locale Understory și codul/documentația Rendiv relevantă. Nu s-au executat teste, build, servicii, Docker, HTTP, MCP sau stdio. Nu s-au apelat API-uri read-only deoarece identitatea buildului, autentificarea, bundle-ul activ și riscul de expunere a memoriei nu puteau fi demonstrate. Nu s-au accesat baze de date, secrete sau conținutul memoriei și nu s-a modificat repository-ul Understory.
 
-Impactul de disponibilitate este intenționat și verificat: succesul doar raportat, un no-op fără marker verificabil și orice `FAILED_NO_EFFECT` fără proof blochează coada; nu există retry automat. În consecință, integrarea reală va necesita un proces de reconciliere/operator pentru aceste rezultate, marker no-op validabil și format/verificator de dovadă no-effect înainte de a putea elibera gate-ul în mod sigur.
+## Recomandare
 
-## Modificări
+Păstrați `unknown` și blocarea cozii pentru timeout, disconnect, răspuns invalid/ambiguu, eșec fără proof și succes raportat fără receipt suficient. Primul pas recomandat pentru contractul viitor este un rezultat structurat/versionat cu outcome explicit și operation ID, inclusiv `no_op` numai pentru calea confirmată de maintain. Pentru replay și reconciliere după timeout sunt necesare separat journal durabil, idempotency și status lookup. Read-back-ul singur nu justifică retry sau durabilitate.
 
-- `src/rendiv_api/understory_adapter.py`: `changed_paths` nu mai este clasificat drept succes complet; produce rezultat necunoscut cu reason code static. Răspunsul `memory_maintain` fără căi păstrează reason dedicat și nu este promovat la succes.
-- `src/rendiv_api/worker.py`: rezultatul `FAILED_NO_EFFECT` fără proof devine unknown și blochează coada; codul motivului este validat dintr-o listă fixă înainte de audit.
-- Teste adaptor, worker și audit: verifică matricea fake, job unknown și blocarea FIFO, reason code, lipsa retryului și execuția fără socket.
-- Documentația `docs/design/04-EFFECT-CERTAINTY-AUDIT.md`, `docs/design/01-ARCHITECTURE.md`, `docs/design/01-DATABASE.md`, `docs/design/02-DECISIONS.md`, `docs/ARCHITECTURE.md`, `docs/DEVELOPMENT.md` și acest raport au fost aliniate la deciziile aplicate.
+Decizii necesare înainte de integrarea reală: ce format/versionare va avea outcome-ul; cum se vor lega operation ID, journal și idempotency de efectele filesystem; ce receipt poate susține succes terminal; și cum se verifică versiunea și configurarea serviciului activ fără a expune datele memoriei.
+
+## Fișiere Rendiv
+
+- `docs/design/05-UNDERSTORY-CONTRACT-AUDIT.md` — matricea pe operații, dovezi, clasificări, necunoscute și opțiuni de contract.
+- `docs/DEVELOPMENT.md` — checkpointul și progresul actualizat.
+- `docs/ARCHITECTURE.md` — statusul adaptorului și al markerului no-op aliniat cu DEVELOPMENT.
+- `docs/LATEST-REPORT.md` — acest raport.
 
 ## Verificări
 
-- Suita completă în venv temporar Python 3.12, cu SQLite temporar și transport fake: **141 passed**.
-- `pip check` în mediul temporar: PASS.
+- Documentație: linkurile locale din cele patru fișiere Rendiv modificate au fost verificate; toate țintele există (PASS).
 - `git diff --check`: PASS.
-- Nu s-au modificat infrastructura, serviciile sau contractul Understory; nu s-a început integrarea reală.
+- Teste: nu au fost rulate; sarcina este audit/documentație read-only și AGENTS.md nu autorizează rularea lor implicită.
 
-## Limitări înainte de integrarea reală
-
-Contractul Understory inspectat nu oferă receipt durabil, status lookup, idempotency, marker textual stabil pentru no-op ori dovadă verificabilă no-effect. `changed_paths` și read-back-ul nu garantează împreună atomicitate multi-fișier sau persistență durabilă după crash. Până la un contract/proces aprobat, rezultatele ambigue rămân unknown și opresc procesarea.
-
-Checkpointul 6B.2C este finalizat în repository; nu începe integrarea reală sau etapa următoare.
+Nu a început integrarea reală.

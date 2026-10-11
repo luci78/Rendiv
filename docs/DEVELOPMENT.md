@@ -10,6 +10,7 @@
 | 4. Implementarea bufferului Rendiv | Acceptare asincronă, procesare serială și integrare cu sistemele sursă/destinație | Neîncepută; nu este autorizată în această etapă |
 | 5. Backup, recuperare și monitorizare | Online backup SQLite, verificare/restaurare izolată și agregate read-only | Încheiată local; numai DB temporare, fără deployment |
 | 6A. Worker local simulat | Claim FIFO serial, tranziții și audit atomic cu executor fictiv | Validată local și într-un container Docker temporar; fără worker automat sau executor extern |
+| 6B. Integrare Understory | Adaptor/protocol fake și audit static al contractului; fără transport real | 6B.2B simulat și 6B.2C aplicat; 6B.2D documentat. Integrarea reală rămâne neîncepută |
 
 La inițializarea documentară, etapele de implementare 2–5 nu fuseseră executate. Progresul curent al codului este urmărit separat mai jos.
 
@@ -50,6 +51,7 @@ La inițializarea documentară, etapele de implementare 2–5 nu fuseseră execu
 | 4. Containerizare izolată | Imagine non-root, Compose intern, volum configurabil și instrucțiuni de operare | Validată în proiect Docker temporar; fără deployment |
 | 5. Backup și observabilitate | Online backup/verificare/restaurare și agregate read-only | Încheiată local; fără endpoint de administrare sau deployment |
 | 6A. Worker local simulat | Claim FIFO serial, audit și stări conservatoare prin executor injectat | Validată cu teste și harness Docker temporar; fără executor real, API startup sau deployment |
+| 6B. Adaptor/protocol Understory | Contract tipizat și transport MCP simulat, apoi audit de certitudine | Numai fake; fără transport real sau worker de producție |
 
 ### Etapa 1 — schelet API (2026-10-11)
 
@@ -208,6 +210,14 @@ Rollback-ul operat ulterior trebuie să folosească imaginea anterioară aprobat
 - `memory_maintain` fără schimbări rămâne `unknown/unknown` cu reason `maintain_response_unverified`, fiindcă contractul local nu specifică un marker textual stabil, validabil. O confirmare explicită și validabilă ar putea fi terminală `succeeded/complete` fără stare nouă; adaptorul nu presupune un asemenea marker.
 - FIFO, atomicitatea job/audit, crash recovery, blocarea unknown și redacția rămân verificate. JSON-RPC folosește UUID per apel pentru corelare, nu idempotency.
 - Nu s-au schimbat schema, migrații, API, Docker/Compose sau infrastructura. Testele folosesc numai fake in-memory și SQLite temporar; nu s-au accesat Understory ori servicii reale.
+
+### Checkpoint 6B.2D — audit read-only al contractului Understory (2026-10-11)
+
+- Inspectat static checkout-ul local Understory la commitul `f6c342332f390a444a8669636b1cf8f9669dd995`; acesta era curat. Codul local arată markerul exact al ramurii healthy no-op din `memory_maintain` (`server.ts:193–203`), care execută lint fără `runMutation`. Aceasta corectează limita documentată în 6B.2C pentru sursa locală; nu dovedește versiunea activă și adaptorul Rendiv încă nu recunoaște markerul.
+- Pentru `memory_add`/`memory_update`, `changed_paths` și succesul raportat nu dovedesc durabilitate ori exhaustivitatea efectelor: conceptul poate fi scris înainte să eșueze indexarea/logarea, iar callback-ul poate lăsa lista goală. Prin urmare `FAILED_NO_EFFECT` nu poate fi demonstrat din `failed`, `isError` sau paths goale.
+- Sursa nu arată operation ID durabil, idempotency, status lookup, revision per operație, tranzacție multi-fișier sau receipt de commit. Timeoutul și anularea efectivă rămân neconfirmate; fallback-ul de model nu este idempotency a mutației.
+- Rezultatele, matricea per operație, opțiunile de contract și referințele exacte sunt în `docs/design/05-UNDERSTORY-CONTRACT-AUDIT.md`. Nu au fost apelate API-uri, citite bundle-uri/DB-uri, rulate teste ori accesate servicii active; nu au fost modificate surse externe.
+- Îmbunătățirea recomandată este un rezultat MCP structurat/versionat cu outcome explicit și operation ID; pentru replay/reconciliere după timeout este necesar separat journal durabil cu idempotency și status. Până atunci rezultatele ambigue rămân `unknown` fără retry.
 
 ### Dezvoltare locală și teste izolate
 
