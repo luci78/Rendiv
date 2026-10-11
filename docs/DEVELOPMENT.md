@@ -174,6 +174,15 @@ Rollback-ul operat ulterior trebuie să folosească imaginea anterioară aprobat
 - Cleanup-ul a folosit numai `docker compose -p rendiv-6a-mv41rojo-9835fu ... down --volumes --remove-orphans` și `docker image rm rendiv-cp6a:rendiv-6a-mv41rojo-9835fu`; zero resurse temporare au rămas. Inventarele de containere, rețele, volume și imagini au corespuns preflight-ului; nu s-au folosit prune.
 - Verificare finală: 65 teste PASS, `pip check` PASS și `git diff --check` PASS în venv temporar. Buildul offline nu a fost demonstrat; digestul OCI nu este fixat. Testarea nu validează filesystem de producție, locking cross-host/NFS, executor real, reconciliere sau deployment.
 
+### Etapa 6B.1 — adaptor Understory simulat (2026-10-11)
+
+- `rendiv_api.understory_adapter` definește tipurile interne `Operation`, `JobPayload`, `TransportRequest`, `TransportResponse` și protocolul `InjectedTransport`. Acesta adaptează numai `memory_add`, `memory_update` și `memory_maintain` din allowlistul existent; payloadul rămâne un obiect JSON generic, fără câmpuri sau semnificații presupuse.
+- Nu există transport HTTP/MCP/socket sau implementare Understory. Transportul trebuie injectat explicit. Tipurile de răspuns sunt clasificări interne pentru adaptor și teste, nu schema unui răspuns Understory.
+- Succesul confirmat se mapează la `succeeded`; eșecul confirmat fără efect la `failed/none`. Timeoutul produce rezultatul worker `timeout`, iar incertitudinea, eroarea/întreruperea transportului și răspunsul invalid produc `unknown`; workerul 6A persistă auditul și blochează coada în aceste cazuri. Adaptorul nu repetă apeluri.
+- Testele folosesc transport fake fără conexiuni; simulează timeout înainte/după efect, întrerupere, ambiguitate, răspuns invalid și integrarea cu auditul/coada workerului.
+- Contractul operațional Understory încă lipsește: schemă și validări pentru fiecare payload, wire protocol și endpoint/tool exact, autentificare, timeouturi, schema răspunsurilor și identificatori de corelare, condițiile pentru a demonstra succesul/no-effect, erori și efecte parțiale, limite/idempotency și procedura de reconciliere. Acestea trebuie confirmate din implementarea/configurația reală înainte de 6B.2.
+- Implementarea nu modifică schema, migrațiile, API-ul, Compose ori workerul; nu accesează servicii externe. Testarea completă și `pip check` pentru etapa sunt consemnate în `docs/LATEST-REPORT.md`.
+
 ### Dezvoltare locală și teste izolate
 
 Dependențele și versiunile folosite se instalează într-un mediu virtual local, nu ca serviciu permanent. Testele creează bazele SQLite sub `tmp_path` și nu cer Understory, Pithagoras sau acces la Docker.
