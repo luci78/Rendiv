@@ -1,45 +1,49 @@
-# Raport Rendiv — Etapa 6B.2A: investigare read-only Understory
+# Raport Rendiv — Etapa 6B.2B: transport MCP simulat
 
 Data: 2026-10-11
 
-## Scop și metodă
+## Subiect și domeniu
 
-Sarcina a fost identificarea contractului real în sursele locale Understory, fără mutații sau conectare la servicii.
+A fost adăugat protocolul MCP JSON-RPC în adaptorul Rendiv, cu schimb de mesaje exclusiv prin transport injectat și fake in-memory pentru teste. Nu există client HTTP/stdio și nu a fost contactat Understory.
 
-Pre-flight: repository-ul Rendiv este /home/luci78/Rendiv-project, iar git status era curat înaintea modificărilor. Checkout-ul local Understory a fost găsit în /home/luci78/ai-stack/understory, la commit f6c342332f390a444a8669636b1cf8f9669dd995; statusul său read-only era curat. Au fost inspectate static fișierele server MCP, auth, wiring Express, agent, tool-uri interne, KnowledgeBase, Bundle, indexer, logger, trace, dreamer și package.json. Nu s-au rulat teste sau cod Understory, Docker, servicii, MCP ori HTTP. Nu s-au citit fișiere .env sau valori credentiale.
+## Modificări
 
-Contractul și proveniența simbol-cu-simbol sunt documentate în docs/design/03-UNDERSTORY-CONTRACT.md.
+- src/rendiv_api/understory_adapter.py: validarea argumentelor documentate, serializarea tools/call, transportul abstract injectabil, decodarea rezultatului MCP și clasificarea conservatoare în ExecutionResult pentru worker.
+- tests/test_understory_adapter.py: peer MCP in-memory, scenarii de protocol, rezultate și integrare cu workerul.
+- docs/DEVELOPMENT.md: progresul Etapei 6B.2B.
+- docs/LATEST-REPORT.md: prezentul raport.
 
-## Confirmat în codul local
+Nu s-au schimbat API-ul Rendiv, schema SQLite, migrațiile, workerul, Dockerfile sau Compose.
 
-- În packages/server/src/mcp/server.ts, buildMcpServer definește memory_add cu content obligatoriu string și suggested_path opțional string; memory_update cu instruction obligatoriu string; memory_maintain cu argumente goale. Schema directă nu impune lungimi minime/maxime pentru șirurile de text.
-- memory_add și memory_update creează instrucțiuni pentru runMutation; acesta folosește agentul LLM și tool-urile interne definite în packages/core/src/agent/tools.ts. memory_maintain întoarce no-op dacă lint-ul indică graf sănătos, altfel execută agentul de reparație.
-- Tool-urile interne pot scrie, patch-ui sau șterge concepte Markdown. KnowledgeBase serializează mutațiile numai în coada in-process a instanței sale. Bundle scrie fișiere, iar afterMutation poate prune directoare, reface indexurile, adăuga în log și face Git autocommit best-effort.
-- Transportul implementat în checkout include MCP Streamable HTTP stateless la /mcp și MCP stdio. Aplicația Express setează body limit de 4 MB și bind la 0.0.0.0. Acestea sunt proprietăți ale codului local, nu confirmări ale topologiei runtime.
-- Bearer auth HTTP pentru /mcp și /api este condițional de AUTH_TOKEN. Nu s-a verificat dacă variabila este definită. Stdio nu folosește middleware-ul HTTP.
-- Outcome-ul agentului poate fi success, partial sau failed. Partial expune text cu fișierele raportate ca scrise, dar nu este atomic și nu are rollback. Failed fără cale în filesChanged nu dovedește universal lipsa efectului: lista este actualizată după rezolvarea completă a operației KnowledgeBase, care poate scrie fișierul principal înainte de index/log.
-- Nu au fost găsite cheie de idempotency, job ID/status durabil sau operație de reconciliere. Trace-urile JSON sunt best-effort și nu sunt transaction log.
-- În sursele locale există alte căi mutative: POST /api/chat, dreamer periodic dacă DREAM_INTERVAL este configurat, CLI mutate și orice acces de scriere directă la bundle. Activarea lor runtime nu a fost verificată.
+## Contract și comportament
 
-## Necunoscute
+Validarea urmează docs/design/03-UNDERSTORY-CONTRACT.md:
 
-- Dacă commitul local corespunde serviciului/imaginii active, transportul folosit de client, ruta și identitatea de rețea.
-- Dacă bearer auth este activă, ce bundle este montat și ce permisiuni are. Nicio valoare secretă nu a fost citită.
-- Timeouturile efective ale clientului MCP, serverului/proxy-ului și providerului LLM; dacă deconectarea anulează agentul sau scrierile deja începute.
-- Versiunile efectiv instalate ale SDK-urilor și dacă dreamer este activ.
-- Nu există suficiente date din cod pentru a demonstra no-effect după o eroare, timeout sau crash. Aceste rezultate trebuie tratate ca unknown.
+- memory_add acceptă content string obligatoriu și suggested_path string opțional.
+- memory_update acceptă instruction string obligatoriu.
+- memory_maintain acceptă doar obiect gol.
+- Câmpuri nedeclarate și valori neconforme sunt respinse înainte de transport.
 
-## Riscuri și condiții pentru integrare
+Adaptorul serializează un JSON-RPC tools/call cu numele tool-ului și arguments, apoi validează versiunea envelope-ului, id-ul corelat și rezultatul MCP text. Singurul transport testat este fake in-memory.
 
-Răspunsul MCP cu isError ori statusul local failed nu este, singur, dovadă sigură că nu s-a scris nimic. Partial poate include doar căile pe care callback-ul a apucat să le înregistreze. Persistența este compusă din operații de filesystem separate, iar serializarea locală nu coordonează procese diferite.
+Clasificări:
+- Confirmat succes → numai un răspuns fără isError, fără marker de mutație parțială și cu cel puțin o cale listată în Files changed; se mapează la succeeded/complete. Aceasta este dovada limitată descrisă de contract: metodele de scriere au raportat completare și căi schimbate.
+- Failed/isError fără dovadă no-effect → unknown.
+- Marker partial, text fără căi, Files changed: none, răspuns ambiguu sau răspuns malformed → unknown. Healthy no-op la memory_maintain este unknown deoarece modelul workerului nu are stare no-op cu effect certainty none.
+- Timeout înainte sau după efectul fake → rezultatul executorului timeout, pe care workerul 6A îl persistă unknown.
+- Disconnect/eroare de transport → unknown.
+- Nu există în contract o dovadă generală no-effect; adaptorul nu emite FAILED_NO_EFFECT. Nu există retry sau reconciliere automată.
 
-Înainte de executorul Rendiv sunt necesare: confirmarea versiunii deployate și a configurației non-secrete relevante; contract request/response versionat cu receipt și rezultat mașinabil; idempotency și status lookup; probă verificabilă de no-effect; comportament explicit pentru partial/crash; timeouturi și anulare măsurate; inventarierea și coordonarea MCP direct, /api/chat, dreamer, CLI și accesului filesystem. Orice credential trebuie doar verificat ca prezență/absență, fără citirea sau publicarea valorii.
+Workerul 6A nu a fost modificat. Testele de integrare confirmă FIFO existent, audit atomic al tranzițiilor, blocarea cozii la unknown și lipsa reexecuției după repornire.
 
-Nu s-a implementat executor real. Etapa 6B.2B nu a început.
+## Verificări
 
-## Verificare și publicare
-
+- Suita completă: 100 teste PASS.
+- pip check: PASS, fără cerințe defecte.
 - git diff --check: PASS.
-- Teste: neexecutate, conform scopului strict read-only și interdicției de a atinge servicii active.
-- Fișiere Rendiv modificate: docs/design/03-UNDERSTORY-CONTRACT.md, docs/DEVELOPMENT.md, docs/LATEST-REPORT.md.
-- Nicio sursă Understory sau altă infrastructură nu a fost modificată.
+- Testul adaptorului blochează crearea socketului; peer-ul fake doar parsează și produce șiruri JSON în memorie.
+- Testele folosesc SQLite temporar. Nu s-au rulat Docker/Compose, servicii, MCP/HTTP/stdio către Understory sau operații externe.
+
+## Limitări înainte de integrarea reală
+
+Contractul local nu oferă receipt durabil, job status, idempotency, confirmare generală de no-effect sau reconciliere. Files changed confirmă numai căile raportate de metode, nu că intenția semantică a fost satisfăcută integral. Rezultatele failed, partial, timeout, disconnect și crash rămân unknown și blochează coada. Potrivirea dintre checkout-ul local Understory și runtime, auth activă, timeouturi și comportamentul de anulare rămân neconfirmate. Integrarea reală necesită aceste garanții și aprobare separată; nu a început în această etapă.
