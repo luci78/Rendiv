@@ -183,6 +183,15 @@ Rollback-ul operat ulterior trebuie să folosească imaginea anterioară aprobat
 - Contractul operațional Understory încă lipsește: schemă și validări pentru fiecare payload, wire protocol și endpoint/tool exact, autentificare, timeouturi, schema răspunsurilor și identificatori de corelare, condițiile pentru a demonstra succesul/no-effect, erori și efecte parțiale, limite/idempotency și procedura de reconciliere. Acestea trebuie confirmate din implementarea/configurația reală înainte de 6B.2.
 - Implementarea nu modifică schema, migrațiile, API-ul, Compose ori workerul; nu accesează servicii externe. Testarea completă și `pip check` pentru etapa sunt consemnate în `docs/LATEST-REPORT.md`.
 
+### Etapa 6B.2A — investigare read-only contract Understory (2026-10-11)
+
+- Checkout-ul local `/home/luci78/ai-stack/understory`, commit `f6c342332f390a444a8669636b1cf8f9669dd995`, a fost inspectat static și era curat la verificarea read-only. Raportul cu surse/simboluri și limite este `docs/design/03-UNDERSTORY-CONTRACT.md`.
+- Codul local confirmă schemele MCP: `memory_add(content: string, suggested_path?: string)`, `memory_update(instruction: string)` și `memory_maintain({})`. Payloadul intern către agent este limbaj liber; agentul poate apela tool-uri interne de scriere pentru concepte Markdown.
+- Transporturile implementate în checkout sunt MCP Streamable HTTP stateless la `/mcp` și stdio. Bearer auth HTTP pentru `/mcp` și `/api` este condițional de `AUTH_TOKEN`; activarea efectivă și transportul clientului nu au fost verificate.
+- Traseul local persistă fișiere Markdown, indexuri și log. Efectele nu sunt tranzacție atomică multi-fișier. `partial` raportează căi schimbate; `failed` cu set de căi gol nu demonstrează universal no-effect, din cauza ordinii scrierilor și înregistrării căilor.
+- Nu s-au găsit idempotency key, job ID/status sau mecanism de reconciliere. Timeouturile/anularea efectivă și potrivirea codului cu runtime rămân neconfirmate. `/api/chat`, dreamer, CLI și accesul filesystem sunt bypass-uri mutative în cod; activarea lor runtime nu a fost verificată.
+- S-au inspectat numai surse locale; fără teste, servicii, HTTP/MCP, Docker sau valori secrete. Nicio sursă Understory nu a fost modificată. Nu s-a implementat executorul real și Etapa 6B.2B nu a început.
+
 ### Dezvoltare locală și teste izolate
 
 Dependențele și versiunile folosite se instalează într-un mediu virtual local, nu ca serviciu permanent. Testele creează bazele SQLite sub `tmp_path` și nu cer Understory, Pithagoras sau acces la Docker.
