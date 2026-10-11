@@ -1,0 +1,57 @@
+# Credentials, local configuration and key material
+.env
+.env.*
+**/.env
+**/.env.*
+*.secret
+*.secrets
+**/*.secret
+**/*.secrets
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.crt
+
+# SQLite databases and sidecar files
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+**/*.db
+**/*.db-*
+**/*.sqlite
+**/*.sqlite-*
+**/*.sqlite3
+**/*.sqlite3-*
+
+# Repository metadata, local environments and generated files
+.git
+.github
+.codex
+.agents
+.venv
+venv
+env
+__pycache__
+**/__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+build
+dist
+*.egg-info
+node_modules
+
+# Test and documentation sources are not needed in the runtime image
+tests
+docs

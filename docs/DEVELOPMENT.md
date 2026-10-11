@@ -46,7 +46,7 @@ La inițializarea documentară, etapele de implementare 2–5 nu fuseseră execu
 | 1. Schelet API | Configurație tipată, health/readiness, migrații SQLite checksum/fail-closed și teste izolate | Încheiată local; fără deployment sau bază persistentă de producție |
 | 2. SQLite + enqueue | Persistență joburi, idempotency și audit | Încheiată local; numai strat intern, fără rută publică |
 | 3. API autentificat | Enqueue/status, bearer per principal, limite și ACL | Încheiată local; fără deployment sau integrare externă |
-| 4. Runtime izolat | Container și volum propriu | Neîncepută; necesită aprobare separată |
+| 4. Containerizare izolată | Imagine non-root, Compose intern, volum configurabil și instrucțiuni de operare | Artefacte și teste statice pregătite local; Docker/build/deployment neexecutate |
 | 5. Backup și observabilitate | Proceduri și metrici | Neîncepută |
 
 ### Etapa 1 — schelet API (2026-10-11)
@@ -72,8 +72,40 @@ La inițializarea documentară, etapele de implementare 2–5 nu fuseseră execu
 - Corpul HTTP este limitat la 272 KiB, payloadul RFC 8785 la 256 KiB; JSON-ul duplicat/ambiguu este refuzat. Limitele implicite conservatoare pentru dezvoltare/test sunt 10 cereri per principal per 60 s și backlog de 1.000 joburi `queued`. Limitarea ratei este în memorie, per proces; pragurile operaționale și dimensionarea trebuie aprobate înainte de deployment. Configurația `production` refuză pornirea dacă lipsesc tokenuri sau dacă limitele nu sunt explicite.
 - Erorile publice folosesc răspunsuri generice: `400/422` validare, `401` autentificare, `404` job inaccesibil/inexistent, `409` conflict idempotency, `413` dimensiune, `429` rată/backlog și `503` DB/schema indisponibilă. Erorile neașteptate nu includ detalii sau stack trace.
 - Backlogul este verificat sub aceeași tranzacție `BEGIN IMMEDIATE`; replay-ul valid se rezolvă înaintea pragului backlog. Readiness/checksum/schema se verifică la enqueue/status, iar orice indisponibilitate refuză operația. Migrațiile existente nu au fost schimbate.
-- Verificare locală: 37 teste PASS, inclusiv ACL, autentificare, replay/conflict, JSON strict, payload/body limits, rate/backlog, schema/DB indisponibilă, concurență, redactare și interdicția de socket extern. Testele folosesc SQLite temporar și ASGI client în proces. Dependențele sunt folosite din `/tmp/rendiv-stage1-venv`; fără serviciu permanent, DB de producție sau conexiune la sisteme externe.
+- Verificare locală: 38 teste PASS, inclusiv ACL, autentificare, replay/conflict, JSON strict, payload/body limits, rate/backlog, schema/DB indisponibilă, concurență, redactare și interdicția de socket extern. Testele folosesc SQLite temporar și ASGI client în proces. Dependențele sunt folosite din `/tmp/rendiv-stage1-venv`; fără serviciu permanent, DB de producție sau conexiune la sisteme externe.
 - Înainte de deployment rămân necesare aprobarea limitelor 10/60 s, backlog 1.000, overhead-ul de corp 16 KiB și configurația TLS/reverse proxy; limitatorul local presupune un singur proces și se resetează la restart. Nu există worker/dispatch, integrare Pithagoras/Understory/Home Assistant, MCP, gateway LLM ori administrator Codex.
+
+### Etapa 4 — containerizare offline (2026-10-11)
+
+- `Dockerfile` are două etape, folosește tag-ul oficial Python 3.12.15 slim Bookworm ([Docker Official Images](https://github.com/docker-library/official-images/blob/master/library/python)), instalează exclusiv versiunile exacte din `requirements.lock` și rulează Uvicorn cu un singur worker sub UID/GID 10001. Imaginea runtime nu copiază teste, documente, fișiere locale sau baze.
+- `.dockerignore` exclude `.env`, chei/certificate, secrete denumite, SQLite și sidecar-urile WAL/SHM, cache-uri, virtualenv, metadatele Git și fișierele de test/documentație.
+- `compose.yaml` definește numai serviciul Rendiv, o rețea Compose dedicată `internal`, un volum named dedicat configurabil și portul containerului doar prin `expose`; nu are `ports`, `privileged`, socket Docker, host networking, mount-uri sau rețele externe. Root filesystem este read-only, capabilitățile sunt eliminate, iar singura cale persistentă RW este `/var/lib/rendiv`.
+- Configurația `production` cere tokenurile din `RENDIV_API_TOKENS_JSON`, volume name și limitele de operare ca variabile furnizate din afara repository-ului. Nu există tokenuri ori valori efective de producție în Compose. Rețeaua `internal` blochează egress-ul containerului; endpointul nu este accesibil de pe host până la o cale de acces explicită și aprobată. Nu a fost introdus un override care să publice portul.
+- Compose are healthcheck către `/readyz`. Instrucțiunile de mai jos sunt doar runbook; nicio comandă Docker/Compose nu a fost executată. Pornirea reală cere aprobarea VM-ului, injectarea secretelor și configurarea accesului privat.
+
+Instrucțiuni pentru operator după gate-urile de deployment (nu rula în etapa de documentare):
+
+```sh
+# Furnizează din secret manager variabilele obligatorii fără a le scrie în repository.
+# Alege un RENDIV_DATA_VOLUME unic și o imagine RENDIV_IMAGE aprobată.
+docker compose -p rendiv -f compose.yaml up -d --build
+
+# Verifică starea și healthcheck-ul fără publicarea unui port pe host.
+docker compose -p rendiv -f compose.yaml ps
+docker compose -p rendiv -f compose.yaml exec -T rendiv-api \
+  python -c "from urllib.request import urlopen; print(urlopen('http://127.0.0.1:8080/readyz', timeout=3).status)"
+
+# Oprirea păstrează volumul de date.
+docker compose -p rendiv -f compose.yaml stop
+
+# Elimină containerul și rețeaua Compose, dar păstrează volumul numit.
+docker compose -p rendiv -f compose.yaml down
+```
+
+Rollback-ul operat ulterior trebuie să folosească imaginea anterioară aprobată și aceeași bază persistentă numai după verificarea compatibilității schemei. Oprește serviciul, selectează explicit referința veche a imaginii, pornește fără rebuild și verifică `/readyz`. Nu folosi `down -v`, nu șterge volumul și nu încerca rollback de schemă prin editarea migrațiilor; pentru incompatibilitate, păstrează baza pentru recuperare conform runbook-ului backup/restore al Etapei 5.
+
+- Verificare locală: toate cele 43 teste PASS (inclusiv 5 teste statice noi), `pip check` PASS și `git diff --check` PASS în `/tmp/rendiv-stage1-venv`. Testele statice verifică multi-stage, lock exact, non-root, absența porturilor publicate și a accesului la socket/rețele/mount-uri externe, variabilele production obligatorii, volumele și instrucțiunile. Dockerfile/Compose nu au fost parsate de Docker, construite sau pornite, conform restricției etapei.
+- Limitare rămasă înainte de deployment: tag-ul Python este fixat la versiunea exactă 3.12.15, însă digestul OCI nu a fost fixat sau verificat printr-un pull/manifest; revizia și pinning-ul digestului sunt obligatorii înainte de build/deployment. Lockfile-ul fixează versiunile, dar nu conține hash-uri de artefact; disponibilitatea offline a wheel-urilor/build cache nu a fost verificată. Nici valoarea reală a volumului, ownership-ul pe VM, conectivitatea callerilor, TLS/proxy, restaurarea sau comportamentul runtime al rețelei nu au fost verificate.
 
 ### Dezvoltare locală și teste izolate
 

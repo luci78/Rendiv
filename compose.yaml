@@ -1,0 +1,64 @@
+services:
+  rendiv-api:
+    image: "${RENDIV_IMAGE:-rendiv-api:stage4}"
+    build:
+      context: .
+      dockerfile: Dockerfile
+    init: true
+    restart: unless-stopped
+    read_only: true
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    environment:
+      RENDIV_APP_ENV: production
+      RENDIV_DATABASE_PATH: /var/lib/rendiv/rendiv.sqlite3
+      RENDIV_SQLITE_BUSY_TIMEOUT_MS: "${RENDIV_SQLITE_BUSY_TIMEOUT_MS:?Set an approved SQLite busy timeout}"
+      RENDIV_API_TOKENS_JSON: "${RENDIV_API_TOKENS_JSON:?Inject service tokens from an approved secret manager}"
+      RENDIV_MAX_PAYLOAD_BYTES: "${RENDIV_MAX_PAYLOAD_BYTES:?Set the approved payload limit}"
+      RENDIV_MAX_REQUEST_BYTES: "${RENDIV_MAX_REQUEST_BYTES:?Set the approved request limit}"
+      RENDIV_RATE_LIMIT_REQUESTS: "${RENDIV_RATE_LIMIT_REQUESTS:?Set the approved per-principal request limit}"
+      RENDIV_RATE_LIMIT_WINDOW_SECONDS: "${RENDIV_RATE_LIMIT_WINDOW_SECONDS:?Set the approved rate window}"
+      RENDIV_BACKLOG_LIMIT: "${RENDIV_BACKLOG_LIMIT:?Set the approved queued-job limit}"
+    command:
+      - uvicorn
+      - rendiv_api.app:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --workers
+      - "1"
+    expose:
+      - "8080"
+    volumes:
+      - type: volume
+        source: rendiv-data
+        target: /var/lib/rendiv
+    networks:
+      - rendiv-private
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=3).read()
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  rendiv-data:
+    name: "${RENDIV_DATA_VOLUME:?Set a unique dedicated Rendiv volume name}"
+
+networks:
+  rendiv-private:
+    internal: true
