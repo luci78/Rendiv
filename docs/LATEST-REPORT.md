@@ -1,47 +1,45 @@
-# Raport Rendiv — Etapa 6B.1: adaptor Understory simulat
+# Raport Rendiv — Etapa 6B.2A: investigare read-only Understory
 
 Data: 2026-10-11
 
-## Subiect și scop
+## Scop și metodă
 
-A fost pregătit un adaptor între executorul injectabil al workerului 6A și o interfață de transport abstractă. Etapa folosește exclusiv transport fake în teste. Nu s-a implementat integrare Understory reală, transport de rețea, MCP, retry sau reconciliere.
+Sarcina a fost identificarea contractului real în sursele locale Understory, fără mutații sau conectare la servicii.
 
-## Constatări și dovezi
+Pre-flight: repository-ul Rendiv este /home/luci78/Rendiv-project, iar git status era curat înaintea modificărilor. Checkout-ul local Understory a fost găsit în /home/luci78/ai-stack/understory, la commit f6c342332f390a444a8669636b1cf8f9669dd995; statusul său read-only era curat. Au fost inspectate static fișierele server MCP, auth, wiring Express, agent, tool-uri interne, KnowledgeBase, Bundle, indexer, logger, trace, dreamer și package.json. Nu s-au rulat teste sau cod Understory, Docker, servicii, MCP ori HTTP. Nu s-au citit fișiere .env sau valori credentiale.
 
-### Confirmat în documentele proiectului și cod
+Contractul și proveniența simbol-cu-simbol sunt documentate în docs/design/03-UNDERSTORY-CONTRACT.md.
 
-- Allowlistul Rendiv existent conține `memory_add`, `memory_update` și `memory_maintain` (`src/rendiv_api/persistence.py`). Documentele de proiectare/integrării nu confirmă schema payloadului pe operație, wire protocolul sau schema răspunsului Understory.
-- Workerul 6A acceptă executor injectat, mapează `SUCCEEDED` la `succeeded`, `FAILED_NO_EFFECT` la `failed/none`, iar `TIMEOUT`/`UNKNOWN` la `unknown`; necunoscutul blochează procesarea, iar auditul tranziției este persistat de worker.
-- `src/rendiv_api/understory_adapter.py` adaugă contracte tipizate interne pentru allowlist, payload generic, request și transport injectabil. Nu include client/transport concret. Payloadul este validat doar ca obiect JSON generic; nu i se atribuie o semantică Understory.
-- Clasificările interne mapate sunt: succes confirmat → `succeeded`; eșec confirmat fără efect → `failed/none`; timeout → `timeout` al executorului, pe care workerul îl persistă ca `unknown`; incertitudine, întrerupere/eroare de transport ori răspuns invalid → `unknown`.
-- Transportul fake testează fiecare operație, payload incompatibil, toate clasele de rezultat, timeout înainte/după efect simulat, deconectare, răspuns ambiguu/invalid, zero apeluri repetate, blocarea cozii și auditul workerului. Fake-ul nu deschide socketuri și nu face apeluri externe.
-- Nu au fost schimbate migrațiile, API-ul public, Compose, workerul ori infrastructura; nu s-au accesat servicii AI/MCP și nu s-au folosit credențiale reale.
+## Confirmat în codul local
 
-### Verificări executate
+- În packages/server/src/mcp/server.ts, buildMcpServer definește memory_add cu content obligatoriu string și suggested_path opțional string; memory_update cu instruction obligatoriu string; memory_maintain cu argumente goale. Schema directă nu impune lungimi minime/maxime pentru șirurile de text.
+- memory_add și memory_update creează instrucțiuni pentru runMutation; acesta folosește agentul LLM și tool-urile interne definite în packages/core/src/agent/tools.ts. memory_maintain întoarce no-op dacă lint-ul indică graf sănătos, altfel execută agentul de reparație.
+- Tool-urile interne pot scrie, patch-ui sau șterge concepte Markdown. KnowledgeBase serializează mutațiile numai în coada in-process a instanței sale. Bundle scrie fișiere, iar afterMutation poate prune directoare, reface indexurile, adăuga în log și face Git autocommit best-effort.
+- Transportul implementat în checkout include MCP Streamable HTTP stateless la /mcp și MCP stdio. Aplicația Express setează body limit de 4 MB și bind la 0.0.0.0. Acestea sunt proprietăți ale codului local, nu confirmări ale topologiei runtime.
+- Bearer auth HTTP pentru /mcp și /api este condițional de AUTH_TOKEN. Nu s-a verificat dacă variabila este definită. Stdio nu folosește middleware-ul HTTP.
+- Outcome-ul agentului poate fi success, partial sau failed. Partial expune text cu fișierele raportate ca scrise, dar nu este atomic și nu are rollback. Failed fără cale în filesChanged nu dovedește universal lipsa efectului: lista este actualizată după rezolvarea completă a operației KnowledgeBase, care poate scrie fișierul principal înainte de index/log.
+- Nu au fost găsite cheie de idempotency, job ID/status durabil sau operație de reconciliere. Trace-urile JSON sunt best-effort și nu sunt transaction log.
+- În sursele locale există alte căi mutative: POST /api/chat, dreamer periodic dacă DREAM_INTERVAL este configurat, CLI mutate și orice acces de scriere directă la bundle. Activarea lor runtime nu a fost verificată.
 
-- `PYTHONPATH=src /tmp/rendiv-stage1-venv/bin/python -m pytest -p no:cacheprovider` — **87 PASS**.
-- `/tmp/rendiv-stage1-venv/bin/python -m pip check` — **PASS**, fără cerințe defecte.
-- `git diff --check` — **PASS**.
-- Toate testele au folosit DB-uri SQLite temporare existente în test suite; nu s-au executat Docker/Compose, servicii permanente sau operații externe.
+## Necunoscute
 
-## Informații neconfirmate necesare înainte de 6B.2
+- Dacă commitul local corespunde serviciului/imaginii active, transportul folosit de client, ruta și identitatea de rețea.
+- Dacă bearer auth este activă, ce bundle este montat și ce permisiuni are. Nicio valoare secretă nu a fost citită.
+- Timeouturile efective ale clientului MCP, serverului/proxy-ului și providerului LLM; dacă deconectarea anulează agentul sau scrierile deja începute.
+- Versiunile efectiv instalate ale SDK-urilor și dacă dreamer este activ.
+- Nu există suficiente date din cod pentru a demonstra no-effect după o eroare, timeout sau crash. Aceste rezultate trebuie tratate ca unknown.
 
-Trebuie confirmate din sursa/configurația Understory și aprobate înainte de orice transport real:
+## Riscuri și condiții pentru integrare
 
-1. Câmpurile, tipurile, limitele și validarea payloadului pentru fiecare dintre cele trei operații, inclusiv dacă loturile logice se păstrează intacte.
-2. Interfața concretă: MCP tool/endpoint, transport și versiuni/protocol, autentificare și principalul folosit.
-3. Schema răspunsurilor, identificatori de corelare și criteriile verificabile pentru succes confirmat și eșec confirmat fără efect.
-4. Comportamentul la efecte parțiale, răspunsuri pierdute, întreruperi și operații care continuă după timeout; limitele de timp și capacitatea de deduplicare/idempotency la destinație.
-5. Dovezile disponibile pentru reconciliere umană și procedura de autorizare/audit a intervenției.
+Răspunsul MCP cu isError ori statusul local failed nu este, singur, dovadă sigură că nu s-a scris nimic. Partial poate include doar căile pe care callback-ul a apucat să le înregistreze. Persistența este compusă din operații de filesystem separate, iar serializarea locală nu coordonează procese diferite.
 
-Clasificările din acest adaptor sunt o interfață internă simulată, nu afirmații despre răspunsurile reale Understory. Nu se poate demonstra `confirmed_no_effect` dintr-o eroare de transport sau timeout.
+Înainte de executorul Rendiv sunt necesare: confirmarea versiunii deployate și a configurației non-secrete relevante; contract request/response versionat cu receipt și rezultat mașinabil; idempotency și status lookup; probă verificabilă de no-effect; comportament explicit pentru partial/crash; timeouturi și anulare măsurate; inventarierea și coordonarea MCP direct, /api/chat, dreamer, CLI și accesului filesystem. Orice credential trebuie doar verificat ca prezență/absență, fără citirea sau publicarea valorii.
 
-## Riscuri și limitări
+Nu s-a implementat executor real. Etapa 6B.2B nu a început.
 
-- Până la definirea și validarea contractului real, adaptorul nu poate fi folosit ca executor de producție. `confirmed_success` și `confirmed_no_effect` sunt categorii furnizate explicit de transportul injectat; nu există logică care să le deducă dintr-un răspuns real.
-- Testele demonstrează comportamentul Rendiv față de clasificări fake; nu dovedesc semantica, disponibilitatea, securitatea, idempotency sau timeouturile Understory.
-- Nu au fost testate rețea, MCP, container runtime, deployment, reconcilieri sau date reale.
+## Verificare și publicare
 
-## Recomandare
-
-Păstrați adaptorul fără transport concret până când informațiile din lista de mai sus sunt verificate și aprobate. Etapa 6B.2 nu a început.
+- git diff --check: PASS.
+- Teste: neexecutate, conform scopului strict read-only și interdicției de a atinge servicii active.
+- Fișiere Rendiv modificate: docs/design/03-UNDERSTORY-CONTRACT.md, docs/DEVELOPMENT.md, docs/LATEST-REPORT.md.
+- Nicio sursă Understory sau altă infrastructură nu a fost modificată.
