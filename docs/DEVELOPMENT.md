@@ -234,6 +234,13 @@ Rollback-ul operat ulterior trebuie să folosească imaginea anterioară aprobat
 - Matricea de teste pozitive/negative per operație, fake MCP transport, SQLite temporar, duplicate/invalide, legacy fallback, blocare FIFO și recovery este doar proiectare; testele nu au fost implementate sau rulate.
 - Deciziile pendinte și gate-urile sunt în `docs/design/06-UNDERSTORY-MCP-CONTRACT-V1.md`. Nu s-au modificat codul executabil, testele, schema, migrațiile sau API-ul și nu s-au accesat Docker/servicii.
 
+### Checkpoint 6B.2G — validator MCP V1 offline (2026-10-11)
+
+- Adăugat `src/rendiv_api/mcp_contract_v1.py`, validator/policy helper independent; nu este conectat adaptorului Understory sau workerului. Validarea strictă include versiune, corelare JSON-RPC, UUIDv7 operation ID, operation, fields/enums, paths, evidence, reason code, duplicate JSON keys și reguli semantice.
+- Toate outcome-urile actuale se clasifică `unknown/unknown`, FIFO-blocking și fără retry. No-op maintain și rejected-before-write nu capătă tranziții terminale fără aprobările/dovezile pendinte.
+- Adăugat `tests/test_mcp_contract_v1.py` pentru cele cinci fixtures din documentul 06, cazuri pozitive/negative, fake transport, policy FIFO izolată și lipsă conexiuni de rețea. Validarea nu dovedește comportamentul Understory activ.
+- Testele și limitele efective ale checkpointului sunt consemnate în `docs/LATEST-REPORT.md`.
+
 ### Dezvoltare locală și teste izolate
 
 Dependențele și versiunile folosite se instalează într-un mediu virtual local, nu ca serviciu permanent. Testele creează bazele SQLite sub `tmp_path` și nu cer Understory, Pithagoras sau acces la Docker.

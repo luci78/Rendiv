@@ -1,37 +1,42 @@
-# Raport Rendiv — Checkpoint 6B.2F: finalizarea documentară a contractului MCP V1
+# Raport Rendiv — Checkpoint 6B.2G: validator MCP V1 exclusiv offline
 
 Data: 2026-10-11
 
-## Scop și domeniu
+## Scop și modificări
 
-Am revizuit propunerea MCP V1 pentru a alinia schema, semantica outcome-urilor, exemplele, maparea Rendiv și matricea de acceptanță. Am citit adaptorul și workerul Rendiv ca surse locale read-only. Nu am accesat Docker, Understory extern, API-uri, MCP, LLM, volume, secrete sau memorie și nu am rulat teste.
+A fost adăugat un validator strict pentru `structuredContent` MCP V1, păstrat independent de adaptorul Understory activ și de worker. Documentul 06 rămâne sursa contractuală; validatorul nu aprobă și nu implementează integrarea reală.
 
-## Modificări documentare
+Fișiere modificate:
 
-- `docs/design/06-UNDERSTORY-MCP-CONTRACT-V1.md` — câmpuri obligatorii și reguli stricte pentru JSON-RPC ID, operation ID, operation, versiune, outcome, no-op, paths, evidence și reason code; reguli pentru duplicate, necunoscute, mismatch și rezultate ambigue; semantici și matrice pe operații; cinci fixtures JSON revizuite; test-plan pozitiv/negativ cu fake MCP, SQLite temporar, fail-closed și blocare FIFO.
-- `docs/DEVELOPMENT.md` — checkpoint 6B.2F consemnat ca revizie documentară, fără implementare.
-- `docs/ARCHITECTURE.md` — aliniat la maparea conservatoare și la deciziile pendinte.
+- `src/rendiv_api/mcp_contract_v1.py` — parser/validator strict, identificator de corelare distinct de operation ID, validare UUIDv7 și paths, duplicate-key detection pentru JSON brut, enums și invariants, erori statice fără conținutul respins; rezultat de policy fail-closed.
+- `tests/test_mcp_contract_v1.py` — fixtures preluate din documentul 06, cazuri positive/negative, fake transport, răspunsuri duplicate/invalide/legacy, politică FIFO fake și interdicție de socket.
+- `docs/design/06-UNDERSTORY-MCP-CONTRACT-V1.md` — precizează că validatorul este independent și neintegrat.
+- `docs/DEVELOPMENT.md` și `docs/ARCHITECTURE.md` — progresul și separarea validatorului consemnate.
 - `docs/LATEST-REPORT.md` — acest raport.
 
-Nu s-au modificat cod executabil, teste, DB/schema, migrații, API sau configurații.
+Nu s-au modificat adaptorul de producție, workerul, API, schema DB, migrații, autentificare sau deployment. Nu s-au accesat Docker, servicii, volume, secrete sau memorie.
 
-## Semantica rezultată
+## Comportament validat
 
-- `applied` rămâne `unknown/unknown` în Rendiv până la aprobare arhitecturală. Succesul raportat nu demonstrează finalizarea semantică, atomicitatea sau durabilitatea.
-- `memory_maintain no_op` poate deveni `succeeded/complete` numai după răspuns V1 valid și corelat, contract/build compatibil identificate, dovada că s-a executat ramura healthy read-only fără mutație și aprobarea operatorului. Până atunci rămâne unknown.
-- `rejected_before_write` cere `execution=not_completed`, cale de reject pre-write, efect none, paths goale și garanție upstream verificabilă că niciun write nu a început. Numai atunci poate fi `failed/none`.
-- `partial`, timeout, disconnect, crash, legacy text-only, mismatch, duplicate/conflict, răspuns invalid sau insuficient demonstrat rămân `unknown/unknown`, blochează FIFO și nu se reîncearcă automat.
-- ID JSON-RPC corelează un exchange; `operation_id` identifică o încercare; niciunul nu este identitate logică idempotentă. Journal durabil, dedupe/status și atomicitate/durabilitate cer mecanisme separate.
+- Request ID este corelat atât cu ID-ul JSON-RPC așteptat, cât și cu `request_id` din envelope; tipurile string/integer nu se pot substitui. Această corelare nu este idempotency.
+- Operation ID trebuie să corespundă UUIDv7 lowercase, dar validatorul nu îi atribuie persistență ori deduplicare.
+- Cheile duplicate sunt detectate la fiecare nivel când se parsează JSON brut. Pentru obiecte Python deja parsate, istoricul cheilor duplicate nu mai este disponibil.
+- Paths absolute POSIX/Windows, traversal, delimitatori/backslash, NUL, newline, duplicate și ordine necanonică sunt respinse. Câmpurile și evidence se verifică strict.
+- Validatorul nu interpretează textul MCP, `changed_paths` ori `isError` ca dovadă de succes. Toate outcome-urile acceptate produc în policy-ul curent `unknown/unknown`, FIFO blocat, fără retry. `rejected_before_write`, no-op maintain și `applied` nu primesc tranziții terminale noi.
+- Răspunsurile legacy, lipsă, timeout, disconnect, necorelate, malformed sau ambigue sunt fail-closed. Mesajele erorilor validatorului nu reproduc valorile respinse.
 
-## Verificări
+## Teste și verificări
 
-- Cele cinci exemple JSON: verificare sintactică și semantică față de schema și invariants din document — PASS.
-- Linkurile locale din documentele schimbate: PASS.
+- Teste dedicate validatorului: **80 passed**.
+- Suita completă: **221 passed** cu Python 3.12.3 și `PYTHONPATH=src`, în mediul virtual temporar existent.
+- `pip check`: PASS (`No broken requirements found`).
 - `git diff --check`: PASS.
-- Testele și serviciile nu au fost rulate; testele din secțiunea de acceptanță sunt doar proiectare.
+- Linkuri locale din cele patru documente verificate: PASS.
 
-## Decizii pendinte
+Testele fake demonstrează parsing, validarea contractului propus și politica fail-closed simulată. Testele worker existente validează separat comportamentul workerului cu executori fictivi și SQLite temporar. Niciun test nu demonstrează contractul, buildul, efectele filesystem sau durability ale Understory runtime.
 
-Aprobarea semanticii `succeeded/complete`; aprobarea outcome-urilor și suportului `structuredContent`; verificarea build/provenance upstream; demonstrarea read-only a ramurii healthy no-op; enforcement-ul pre-write pentru failed/none; journal/idempotency/status și cerințele de durability. Documentul V1 rămâne PROPUS, nu APROBAT.
+## Decizii și limitări rămase
 
-Checkpointul următor nu a început.
+Documentul V1 rămâne **PROPUS**, nu aprobat. Proveniența buildului Understory este neconfirmată. Semantica `succeeded/complete`, terminalizarea healthy no-op, garanția upstream zero-write pentru failed/none și suportul SDK pentru `structuredContent` rămân gate-uri operator. Journal durabil, idempotency/status, reconciliere și atomicitate/durability nu sunt implementate.
+
+Nu începe checkpointul 6B.2H și nu porni integrarea reală.

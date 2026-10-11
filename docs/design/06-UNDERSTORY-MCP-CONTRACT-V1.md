@@ -1,7 +1,7 @@
 # Contract MCP Understory V1 — propunere
 
 - **Checkpoint:** 6B.2E
-- **Stare:** PROPUS; neimplementat și neaprobat pentru producție
+- **Stare contract:** PROPUS; neaprobat pentru producție. Validator offline independent adăugat în checkpointul 6B.2G; nu este integrat în adaptor/worker
 - **Data:** 2026-10-11
 - **Domeniu:** răspunsurile operațiilor `memory_add`, `memory_update`, `memory_maintain` și maparea lor în Rendiv
 - **Bază factuală:** sursele locale și limitele din `03-UNDERSTORY-CONTRACT.md` și `05-UNDERSTORY-CONTRACT-AUDIT.md`; runtime-ul este raportat separat mai jos
@@ -40,7 +40,7 @@ Nu au fost citite configuri de build externe sau fișiere care pot conține secr
 
 ## 2. Statut și principii
 
-Contractul de mai jos este **PROPUS** și **NEIMPLEMENTAT**. Nicio regulă nu este APROBATĂ pentru schimbarea codului Understory ori Rendiv. Secțiunea runtime de mai sus consemnează numai rezultatele checkpointului 6B.2E; această revizie 6B.2F nu a accesat Docker sau servicii.
+Contractul de mai jos este **PROPUS** și neaprobat pentru integrare. Validatorul independent `src/rendiv_api/mcp_contract_v1.py` și testele sale offline validează fixtures conform propunerii; nu conectează adaptorul sau workerul și nu implementează comportamentul Understory. Nicio regulă nu este APROBATĂ pentru schimbarea codului Understory ori integrarea Rendiv. Secțiunea runtime consemnează numai rezultatele 6B.2E; checkpointurile 6B.2F/6B.2G nu au accesat Docker sau servicii.
 
 V1 propune un obiect `structuredContent` în rezultatul MCP `tools/call`, păstrând textul `content` pentru clienții existenți. Argumentele actuale ale tool-urilor rămân neschimbate.
 
@@ -75,7 +75,7 @@ Rezultatul propus este un JSON object cu `additionalProperties=false` la nivelul
 | `operation` | obligatoriu, string enum | Exact unul din `memory_add`, `memory_update`, `memory_maintain`; trebuie egal cu tool-ul cerut |
 | `outcome` | obligatoriu, enum | `applied`, `no_op`, `partial`, `rejected_before_write`, `unknown` |
 | `no_op` | obligatoriu, boolean | Adevărat numai pentru outcome `no_op`; fals pentru toate celelalte |
-| `changed_paths` | obligatoriu, array de string | Paths raportate; unice, sortate lexicografic, POSIX-relative, non-empty, fără absolute path, `.`/`..`, backslash, NUL sau newline. `[]` este valid când outcome-ul și evidence permit |
+| `changed_paths` | obligatoriu, array de string | Paths raportate; unice, sortate lexicografic, POSIX-relative, non-empty, fără absolute POSIX/Windows path, `.`/`..`, backslash, NUL sau newline. `[]` este valid când outcome-ul și evidence permit |
 | `evidence` | obligatoriu, object exact | Câmpurile și combinațiile de mai jos |
 | `reason_code` | condițional, string enum | Obligatoriu pentru `partial`, `rejected_before_write`, `unknown`; interzis pentru `applied` și `no_op`; numai allowlist V1 de mai jos |
 
@@ -102,7 +102,7 @@ Toate câmpurile de aici sunt obligatorii, string enums, fără valori libere:
 | Outcome | `execution` | `execution_path` | `effect` | `effect_scope` | Paths | Alte reguli |
 |---|---|---|---|---|---|---|
 | `applied` | `completed` | `mutating` | `reported_applied` | `reported_paths_only` sau `operation_scope` | zero sau mai multe | `no_op=false`; fără `reason_code`; read_back nu poate fi `observed_mismatch`; atomicity/durability `not_asserted` |
-| `no_op` | `completed` | `healthy_no_op` | `reported_none` | `operation_scope` | exact `[]` | `no_op=true`; fără `reason_code`; read_back nu poate fi `observed_mismatch`; numai pentru ramură demonstrată fără mutație |
+| `no_op` | `completed` | `healthy_no_op` | `reported_none` | `operation_scope` | exact `[]` | Numai `memory_maintain`; `no_op=true`; fără `reason_code`; read_back nu poate fi `observed_mismatch`; ramura trebuie demonstrată fără mutație |
 | `partial` | `completed`, `not_completed` sau `unknown` | `mutating` sau `unknown` | `reported_partial` | `reported_paths_only`, `operation_scope` sau `unknown` | orice listă de paths valide | `no_op=false`; `reason_code` obligatoriu; nu afirmă că manifestul e exhaustiv |
 | `rejected_before_write` | exact `not_completed` | exact `rejected_pre_write` | `reported_none` | `operation_scope` | exact `[]` | `no_op=false`; `reason_code` obligatoriu; garanție verificabilă upstream că niciun write nu a început |
 | `unknown` | orice enum | `mutating` sau `unknown` | `reported_applied`, `reported_none`, `reported_partial` sau `unknown` | `reported_paths_only`, `operation_scope` sau `unknown` | orice listă validă | `no_op=false`; `reason_code` obligatoriu; nu produce tranziție terminală de succes/eșec; se aplică toate invariant-urile de mai jos |
@@ -391,4 +391,5 @@ Până la aprobarea deciziilor, acest document rămâne **PROPUS** și nicio tra
 - Dovezi runtime din checkpointul 6B.2E: documentate în §1, fără reinspecție în acest checkpoint.
 - Checkout local Understory consemnat anterior la `f6c342332f390a444a8669636b1cf8f9669dd995`; legătura cu imaginea runtime rămâne neconfirmată.
 - Codul Rendiv actual din `understory_adapter.py` decodează numai text `content`, clasifică raportul `Files changed` ca unknown și nu recunoaște `structuredContent`/no-op. `worker.py` poate persista unknown și bloca FIFO; `FAILED_NO_EFFECT` fără proof verificabil devine unknown. Acestea sunt comportamente de cod local, nu implementarea V1.
+- Validatorul independent adăugat în 6B.2G este numai parser/policy helper pentru fixture testing; nu este importat de adaptor sau worker și nu demonstrează conformitatea runtime Understory.
 - În acest checkpoint s-au citit numai fișiere din Rendiv. Fără Docker, Understory extern, endpointuri, secrete, volume, memorie, teste sau operații de schimbare a stării.
