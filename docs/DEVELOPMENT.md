@@ -131,6 +131,21 @@ Rollback-ul operat ulterior trebuie să folosească imaginea anterioară aprobat
 - Monitorizarea internă read-only a raportat queued=2, backlog=2 și unknown=0. Hashul logic al schemei/joburilor/evenimentelor înainte și după monitorizare a coincis; baza nu s-a modificat.
 - Teste negative runtime sub UID/GID 10001: backup corupt refuzat cu eroare controlată; restore către destinație existentă refuzat fără schimbarea octeților; directoare fără permisiune de scriere au refuzat create și restore fără artefact publicat; DB absentă a produs eroare controlată atât pentru backup, cât și pentru monitorizare.
 - Au fost eliminate numai containerul, rețeaua, cele trei volume și imaginea temporare de mai sus, prin `docker compose down --volumes --remove-orphans` scoped la proiect și `docker image rm` pe tag-ul unic. Confirmarea după cleanup a găsit zero resurse cu prefixul proiectului. Inventarul containerelor, rețelelor, volumelor și imaginilor inițiale a rămas neschimbat; nu s-au folosit prune. Fișierele temporare locale din `/tmp/rendiv-5a-mv40znicmptf4j` au fost șterse.
+- Comenzile pentru operațiile runtime principale au fost:
+
+  ```sh
+  docker compose --env-file /tmp/rendiv-5a-mv40znicmptf4j/test.env \
+    -p rendiv-5a-mv40znicmptf4j -f compose.yaml \
+    -f /tmp/rendiv-5a-mv40znicmptf4j/compose-override.yaml \
+    build --pull --no-cache rendiv-api
+  docker compose --env-file /tmp/rendiv-5a-mv40znicmptf4j/test.env \
+    -p rendiv-5a-mv40znicmptf4j -f compose.yaml \
+    -f /tmp/rendiv-5a-mv40znicmptf4j/compose-override.yaml \
+    down --volumes --remove-orphans
+  docker image rm rendiv-cp5a:mv40znicmptf4j
+  ```
+
+  În container, backupul, verificarea și restore-ul au folosit `python -m rendiv_api.backup create /var/lib/rendiv/rendiv.sqlite3 /checkpoint/backup/checkpoint.sqlite3`, `python -m rendiv_api.backup verify /checkpoint/backup/checkpoint.sqlite3`, `python -m rendiv_api.backup restore /checkpoint/backup/checkpoint.sqlite3 /checkpoint/restore/restored.sqlite3` și apoi `python -m rendiv_api.backup verify /checkpoint/restore/restored.sqlite3`. Fișierul env cu bearer fictiv nu a fost inclus în repository sau raport.
 - Verificare locală după runtime: 53 teste PASS, `pip check` PASS și `git diff --check` PASS în `/tmp/rendiv-stage1-venv`. Nicio bază reală, volum existent sau serviciu extern nu a fost accesat; nu s-a făcut deployment.
 - Înainte de producție rămân deschise retenția/rotația, criptarea la rest, locația aprobată/off-host și controlul accesului la backup, RPO/RTO și responsabilul de recuperare, pinning OCI după digest și validarea buildului offline. Checkpointul nu testează retenția, criptarea, locația de producție, RPO/RTO, filesystemul ori volumul persistent real.
 

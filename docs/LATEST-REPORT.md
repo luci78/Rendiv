@@ -23,6 +23,7 @@
 ## Cleanup și verificări
 
 - Au fost eliminate numai containerul și rețeaua proiectului unic, cele trei volume de test și imaginea `rendiv-cp5a:mv40znicmptf4j`, prin `docker compose down --volumes --remove-orphans` scoped la proiect și `docker image rm` pe tag-ul temporar. Verificarea după cleanup a găsit zero resurse cu prefixul unic. Fișierele temporare locale din `/tmp/rendiv-5a-mv40znicmptf4j` au fost eliminate.
+- Comenzile runtime pentru build și cleanup au fost `docker compose --env-file /tmp/rendiv-5a-mv40znicmptf4j/test.env -p rendiv-5a-mv40znicmptf4j -f compose.yaml -f /tmp/rendiv-5a-mv40znicmptf4j/compose-override.yaml build --pull --no-cache rendiv-api`, aceeași comandă Compose cu `down --volumes --remove-orphans`, apoi `docker image rm rendiv-cp5a:mv40znicmptf4j`. În container s-au folosit comenzile `python -m rendiv_api.backup create /var/lib/rendiv/rendiv.sqlite3 /checkpoint/backup/checkpoint.sqlite3`, `verify /checkpoint/backup/checkpoint.sqlite3`, `restore /checkpoint/backup/checkpoint.sqlite3 /checkpoint/restore/restored.sqlite3` și `verify /checkpoint/restore/restored.sqlite3`. Fișierul de environment cu bearer fictiv nu a fost publicat.
 - Inventarul Docker post-test a corespuns inventarului inițial pentru containere, rețele, volume și imagini; nu s-au folosit comenzi prune și nu s-au șters resurse existente.
 - Suita completă Etapele 1–5: **53 teste PASS** (Python 3.12.3).
 - `pip check`: **PASS**, fără dependențe incompatibile în venv temporar.
