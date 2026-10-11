@@ -1,68 +1,47 @@
-# Raport Checkpoint 6A — validare worker Rendiv în Docker
+# Raport Rendiv — Etapa 6B.1: adaptor Understory simulat
 
-- **Data:** 2026-10-11
-- **Subiect:** Test runtime izolat al workerului local simulat, concurenței, opririi forțate și recuperării `unknown`
-- **Repository înainte de test:** curat la `c988bd0` (`Report Rendiv Stage 6A validation`); starea Git a fost verificată înaintea resurselor temporare.
-- **Commit documentare checkpoint:** `0a86c60` (`Document Rendiv Stage 6A Docker checkpoint`); raportul curent este publicat separat.
-- **Domeniu:** Imagine, container, volum, rețea și harness fictiv temporare pentru Rendiv. Fără deployment permanent, executor real, Understory/Pithagoras/Home Assistant/llama.cpp/MCP sau modificări de infrastructură.
+Data: 2026-10-11
 
-## Preflight și izolare
+## Subiect și scop
 
-- Docker CLI/daemon 29.8.2, Compose 5.6.0. Inventarul inițial avea patru containere, cinci rețele, niciun named volume și patru imagini relevante. Nu exista coliziune pentru numele unice folosite.
-- Tag temporar: `rendiv-cp6a:rendiv-6a-mv41rojo-9835fu`. Proiect Compose: `rendiv-6a-mv41rojo-9835fu`; volum: `rendiv-6a-mv41rojo-9835fu-data`; rețea: `rendiv-6a-mv41rojo-9835fu_rendiv-private`.
-- Configurația randată a definit un singur serviciu, fără porturi publicate, cu rețea internă proprie, un volum named pentru DB și harness montat read-only. Containerul inspectat avea UID/GID `10001:10001`, `ReadonlyRootfs=true`, `PortBindings={}`, fără Docker socket și numai mount-urile menționate; rețeaua internă avea un singur container.
-- Buildul imaginii a trecut cu `docker compose ... build --pull --no-cache rendiv-api`; a descărcat imaginea Python și pachetele din lockfile, deci a necesitat internet. A fost pornit numai serviciul API din proiect cu `up -d --no-build`; workerul a fost lansat separat de harness.
+A fost pregătit un adaptor între executorul injectabil al workerului 6A și o interfață de transport abstractă. Etapa folosește exclusiv transport fake în teste. Nu s-a implementat integrare Understory reală, transport de rețea, MCP, retry sau reconciliere.
 
-## Teste runtime
+## Constatări și dovezi
 
-Harnessul a fost invocat explicit prin `docker compose ... exec -T rendiv-api python /checkpoint/worker_harness.py`. A folosit numai `EnqueueRepository`, SQLite pe volumul temporar și executori ficțivi.
+### Confirmat în documentele proiectului și cod
 
-- **FIFO/serial:** trei joburi au fost executate în ordinea `queue_seq`, cu rezultate simulate succes, eșec confirmat fără efect și succes. Stările/certitudinea efectului și evenimentele append-only au corespuns rezultatelor; nu a existat mai mult de un apel executor activ.
-- **Timeout incert:** primul job a devenit `unknown/unknown`; următorul a rămas `queued/none`. Pornirea ulterioară a fost blocată de `unknown` și nu a reexecutat niciun job.
-- **Doi workeri concurenți:** două procese distincte, pe același container/filesystem/DB, au concurat. Primul a ținut executorul fictiv activ; al doilea a primit `WorkerBusy`. După finalizarea primului, un singur job era `succeeded`, următorul `queued`.
-- **Oprire forțată:** un proces worker a fost omorât cu `SIGKILL` în timpul unui job `running`. La repornire, jobul a trecut atomic la `unknown/unknown`, a fost scris `recovered_running_as_unknown`, coada a rămas blocată și executorul repornit nu a fost apelat.
-- **Rețea/AI:** harnessul a înlocuit socket connect cu refuz imediat; scenariile au trecut. Rețeaua Compose era internă fără egress. Nu au avut loc apeluri AI sau către servicii externe.
+- Allowlistul Rendiv existent conține `memory_add`, `memory_update` și `memory_maintain` (`src/rendiv_api/persistence.py`). Documentele de proiectare/integrării nu confirmă schema payloadului pe operație, wire protocolul sau schema răspunsului Understory.
+- Workerul 6A acceptă executor injectat, mapează `SUCCEEDED` la `succeeded`, `FAILED_NO_EFFECT` la `failed/none`, iar `TIMEOUT`/`UNKNOWN` la `unknown`; necunoscutul blochează procesarea, iar auditul tranziției este persistat de worker.
+- `src/rendiv_api/understory_adapter.py` adaugă contracte tipizate interne pentru allowlist, payload generic, request și transport injectabil. Nu include client/transport concret. Payloadul este validat doar ca obiect JSON generic; nu i se atribuie o semantică Understory.
+- Clasificările interne mapate sunt: succes confirmat → `succeeded`; eșec confirmat fără efect → `failed/none`; timeout → `timeout` al executorului, pe care workerul îl persistă ca `unknown`; incertitudine, întrerupere/eroare de transport ori răspuns invalid → `unknown`.
+- Transportul fake testează fiecare operație, payload incompatibil, toate clasele de rezultat, timeout înainte/după efect simulat, deconectare, răspuns ambiguu/invalid, zero apeluri repetate, blocarea cozii și auditul workerului. Fake-ul nu deschide socketuri și nu face apeluri externe.
+- Nu au fost schimbate migrațiile, API-ul public, Compose, workerul ori infrastructura; nu s-au accesat servicii AI/MCP și nu s-au folosit credențiale reale.
 
-Comenzile relevante folosite (fișierul env a conținut numai valori fictive și nu este publicat):
+### Verificări executate
 
-```sh
-docker compose --env-file /tmp/rendiv-6a-mv41rojo-9835fu/test.env \
-  -p rendiv-6a-mv41rojo-9835fu -f compose.yaml \
-  -f /tmp/rendiv-6a-mv41rojo-9835fu/compose-override.yaml \
-  build --pull --no-cache rendiv-api
+- `PYTHONPATH=src /tmp/rendiv-stage1-venv/bin/python -m pytest -p no:cacheprovider` — **87 PASS**.
+- `/tmp/rendiv-stage1-venv/bin/python -m pip check` — **PASS**, fără cerințe defecte.
+- `git diff --check` — **PASS**.
+- Toate testele au folosit DB-uri SQLite temporare existente în test suite; nu s-au executat Docker/Compose, servicii permanente sau operații externe.
 
-docker compose --env-file /tmp/rendiv-6a-mv41rojo-9835fu/test.env \
-  -p rendiv-6a-mv41rojo-9835fu -f compose.yaml \
-  -f /tmp/rendiv-6a-mv41rojo-9835fu/compose-override.yaml \
-  up -d --no-build rendiv-api
+## Informații neconfirmate necesare înainte de 6B.2
 
-docker compose --env-file /tmp/rendiv-6a-mv41rojo-9835fu/test.env \
-  -p rendiv-6a-mv41rojo-9835fu -f compose.yaml \
-  -f /tmp/rendiv-6a-mv41rojo-9835fu/compose-override.yaml \
-  exec -T rendiv-api python /checkpoint/worker_harness.py
+Trebuie confirmate din sursa/configurația Understory și aprobate înainte de orice transport real:
 
-docker compose --env-file /tmp/rendiv-6a-mv41rojo-9835fu/test.env \
-  -p rendiv-6a-mv41rojo-9835fu -f compose.yaml \
-  -f /tmp/rendiv-6a-mv41rojo-9835fu/compose-override.yaml \
-  down --volumes --remove-orphans
-docker image rm rendiv-cp6a:rendiv-6a-mv41rojo-9835fu
-```
+1. Câmpurile, tipurile, limitele și validarea payloadului pentru fiecare dintre cele trei operații, inclusiv dacă loturile logice se păstrează intacte.
+2. Interfața concretă: MCP tool/endpoint, transport și versiuni/protocol, autentificare și principalul folosit.
+3. Schema răspunsurilor, identificatori de corelare și criteriile verificabile pentru succes confirmat și eșec confirmat fără efect.
+4. Comportamentul la efecte parțiale, răspunsuri pierdute, întreruperi și operații care continuă după timeout; limitele de timp și capacitatea de deduplicare/idempotency la destinație.
+5. Dovezile disponibile pentru reconciliere umană și procedura de autorizare/audit a intervenției.
 
-## Cleanup și verificări
+Clasificările din acest adaptor sunt o interfață internă simulată, nu afirmații despre răspunsurile reale Understory. Nu se poate demonstra `confirmed_no_effect` dintr-o eroare de transport sau timeout.
 
-- Cleanup-ul a eliminat numai containerul, rețeaua, volumul și imaginea create pentru acest proiect; filtrele după numele unic au returnat zero resurse. Directorul temporar local, inclusiv tokenul fictiv și harnessul, a fost șters. Nu s-au folosit prune sau comenzi globale de curățare.
-- Inventarele post-test au corespuns preflight-ului: aceleași patru containere, cinci rețele și patru imagini; zero named volumes. Resursele existente nu au fost modificate.
-- Suita completă a proiectului: **65 teste PASS** (Python 3.12.3, venv temporar, SQLite de test).
-- `pip check`: **PASS**, fără dependențe incompatibile. `git diff --check`: **PASS**.
-- Nu au fost necesare corecții de cod; Etapa 6A a rămas neschimbată.
+## Riscuri și limitări
 
-## Limitări și riscuri rămase
-
-- Buildul a necesitat internet; build offline nu a fost demonstrat, iar OCI image reference nu este fixată după digest.
-- `flock` oferă coordonarea testată numai când workerii folosesc același fișier pe filesystem POSIX local cu locking fiabil. Nu s-au validat NFS, locking cross-host sau mai multe hosturi.
-- Harnessul demonstrează workerul local cu executor fictiv. Nu validează efecte Understory, executor real, supervisor, lease/heartbeat, reconciliere umană sau automatizată, producție ori cutover.
-- Joburile `unknown` cer dovezi primare și intervenție umană viitoare; această etapă nu adaugă procedură de mutare a stării sau retry.
+- Până la definirea și validarea contractului real, adaptorul nu poate fi folosit ca executor de producție. `confirmed_success` și `confirmed_no_effect` sunt categorii furnizate explicit de transportul injectat; nu există logică care să le deducă dintr-un răspuns real.
+- Testele demonstrează comportamentul Rendiv față de clasificări fake; nu dovedesc semantica, disponibilitatea, securitatea, idempotency sau timeouturile Understory.
+- Nu au fost testate rețea, MCP, container runtime, deployment, reconcilieri sau date reale.
 
 ## Recomandare
 
-Înainte de orice integrare reală, validați filesystemul și forma de gate pentru topologia țintă, apoi aprobați contractul executorului și procedura de reconciliere umană. Nu activați workerul în API/Compose și nu începeți Etapa 6B pe baza acestui checkpoint.
+Păstrați adaptorul fără transport concret până când informațiile din lista de mai sus sunt verificate și aprobate. Etapa 6B.2 nu a început.
