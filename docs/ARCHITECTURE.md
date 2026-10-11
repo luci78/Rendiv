@@ -11,7 +11,7 @@ Rendiv va coordona conversațiile Pithagoras cu memoria semantică Understory, p
 | Pithagoras | Interfața conversațională și integrarea MCP cu Understory | Codul existent are integrare Understory și un API de memorie. Lista de tool-uri este expusă sub prefixul `understory_memory_*`. |
 | Understory | Memorie în Markdown, cu concepte și legături semantice | MCP oferă `memory_query`, `memory_add`, `memory_update`, `memory_status` și `memory_maintain`. Adăugarea, actualizarea și mentenanța pot conduce agentul intern și pot dura minute. |
 | llama.cpp | Server de inferență comun celor două aplicații | Utilizatorul a verificat runtime-ul Understory prin `docker inspect`: `LLM_MODEL=Qwen3.6-35B-A3B-Q5_K_M`, `LLM_API_BASE_URL=http://192.168.20.30:8080/v1`. Pithagoras folosește aceeași configurație conform contextului anterior, dar nu a fost reverificat în această etapă. |
-| Rendiv | Coordonare și coadă persistentă planificată | Documentație inițializată; bufferul nu este implementat. |
+| Rendiv | Coordonare și coadă persistentă planificată | Local, API-ul autentificat enqueue/status și persistența SQLite sunt implementate; workerul, dispatch-ul și procesarea bufferului nu sunt implementate. Fără deployment sau integrare externă. |
 | Home Assistant | Sursă de date pentru procesare | Datele vor fi trimise în loturi logice. Understory rămâne responsabil pentru organizarea semantică. |
 
 Contextul de operare indică un timeout MCP implicit de 60 de secunde. Acest interval este mai scurt decât unele operații Understory, care pot dura câteva minute. Prin urmare, expirarea așteptării clientului nu poate fi tratată automat drept eșecul operației din aval.

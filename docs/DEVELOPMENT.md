@@ -45,7 +45,7 @@ La inițializarea documentară, etapele de implementare 2–5 nu fuseseră execu
 |---|---|---|
 | 1. Schelet API | Configurație tipată, health/readiness, migrații SQLite checksum/fail-closed și teste izolate | Încheiată local; fără deployment sau bază persistentă de producție |
 | 2. SQLite + enqueue | Persistență joburi, idempotency și audit | Încheiată local; numai strat intern, fără rută publică |
-| 3. Status + autentificare | Contract HTTP, ACL și limite | Neîncepută |
+| 3. API autentificat | Enqueue/status, bearer per principal, limite și ACL | Încheiată local; fără deployment sau integrare externă |
 | 4. Runtime izolat | Container și volum propriu | Neîncepută; necesită aprobare separată |
 | 5. Backup și observabilitate | Proceduri și metrici | Neîncepută |
 
@@ -63,6 +63,17 @@ La inițializarea documentară, etapele de implementare 2–5 nu fuseseră execu
 - Replay-ul cu aceeași identitate/hash întoarce jobul fără eveniment nou; hash diferit refuză fără modificări. Fiecare writer setează și verifică foreign keys, WAL, synchronous FULL și busy timeout. Ready/checksum/schema neconforme blochează enqueue înainte de scriere și se reverifică în tranzacție.
 - API-ul public `POST /v1/jobs`, status, workerul, dispatch-ul și orice conexiune externă rămân absente. Testul de rețea interzice explicit socket connect în timpul enqueue-ului.
 - Verificare locală: 24 teste PASS cu SQLite exclusiv în directoare temporare; `pip check` și `git diff --check` PASS. Dependințele au fost folosite din venv temporar; nu s-a creat DB persistentă și nu s-a pornit serviciu.
+
+### Etapa 3 — API autentificat (2026-10-11)
+
+- `POST /v1/jobs` acceptă numai corp JSON strict cu `operation` și obiectul `payload`; câmpurile suplimentare, inclusiv `source_principal`, sunt respinse. `Idempotency-Key` este obligatoriu. Răspunsul `202` este construit numai după ce repository-ul confirmă COMMIT; replay-ul identic întoarce același job, iar hash diferit produce `409`.
+- `GET /v1/jobs/{job_id}` selectează numai metadate și filtrează în SQL după principalul derivat din bearer token. Joburile altui principal și ID-urile inexistente răspund identic cu `404`. Payloadul, hashul, cheia de idempotency și principalul nu apar în răspuns.
+- Tokenurile sunt configurate numai prin `RENDIV_API_TOKENS_JSON` ca mapare principal–token și stocate în setări `SecretStr`; middleware-ul compară digesturi cu `compare_digest`, verifică toate intrările și autentifică înainte de citirea corpului. Tokenurile pentru teste sunt generate în memorie.
+- Corpul HTTP este limitat la 272 KiB, payloadul RFC 8785 la 256 KiB; JSON-ul duplicat/ambiguu este refuzat. Limitele implicite conservatoare pentru dezvoltare/test sunt 10 cereri per principal per 60 s și backlog de 1.000 joburi `queued`. Limitarea ratei este în memorie, per proces; pragurile operaționale și dimensionarea trebuie aprobate înainte de deployment. Configurația `production` refuză pornirea dacă lipsesc tokenuri sau dacă limitele nu sunt explicite.
+- Erorile publice folosesc răspunsuri generice: `400/422` validare, `401` autentificare, `404` job inaccesibil/inexistent, `409` conflict idempotency, `413` dimensiune, `429` rată/backlog și `503` DB/schema indisponibilă. Erorile neașteptate nu includ detalii sau stack trace.
+- Backlogul este verificat sub aceeași tranzacție `BEGIN IMMEDIATE`; replay-ul valid se rezolvă înaintea pragului backlog. Readiness/checksum/schema se verifică la enqueue/status, iar orice indisponibilitate refuză operația. Migrațiile existente nu au fost schimbate.
+- Verificare locală: 37 teste PASS, inclusiv ACL, autentificare, replay/conflict, JSON strict, payload/body limits, rate/backlog, schema/DB indisponibilă, concurență, redactare și interdicția de socket extern. Testele folosesc SQLite temporar și ASGI client în proces. Dependențele sunt folosite din `/tmp/rendiv-stage1-venv`; fără serviciu permanent, DB de producție sau conexiune la sisteme externe.
+- Înainte de deployment rămân necesare aprobarea limitelor 10/60 s, backlog 1.000, overhead-ul de corp 16 KiB și configurația TLS/reverse proxy; limitatorul local presupune un singur proces și se resetează la restart. Nu există worker/dispatch, integrare Pithagoras/Understory/Home Assistant, MCP, gateway LLM ori administrator Codex.
 
 ### Dezvoltare locală și teste izolate
 

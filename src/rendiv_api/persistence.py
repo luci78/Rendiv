@@ -43,6 +43,14 @@ class IdempotencyConflict(EnqueueError):
     """The idempotency identity was previously used for a different payload."""
 
 
+class PayloadTooLarge(InvalidEnqueue):
+    """The canonical payload exceeds its configured byte ceiling."""
+
+
+class BacklogFull(EnqueueError):
+    """The configured queued-job backlog limit has been reached."""
+
+
 class DatabaseNotReady(EnqueueError):
     """The database is not fully migrated and ready for writes."""
 
@@ -58,6 +66,18 @@ class EnqueueResult:
     queue_seq: int
     created_at_ms: int
     replay: bool
+
+
+@dataclass(frozen=True)
+class JobStatus:
+    job_id: str
+    operation: str
+    state: str
+    effect_certainty: str
+    queue_seq: int
+    created_at_ms: int
+    updated_at_ms: int
+    finished_at_ms: int | None
 
 
 def _uuid7() -> str:
@@ -87,7 +107,7 @@ def _canonical_payload(payload: Any, *, max_payload_bytes: int) -> str:
     except (rfc8785.CanonicalizationError, TypeError, ValueError, OverflowError) as exc:
         raise InvalidEnqueue("payload is not valid RFC 8785 JSON") from exc
     if len(payload_bytes) > max_payload_bytes:
-        raise InvalidEnqueue("payload exceeds configured byte limit")
+        raise PayloadTooLarge("payload exceeds configured byte limit")
     return payload_bytes.decode("utf-8")
 
 
@@ -100,15 +120,19 @@ class EnqueueRepository:
         *,
         busy_timeout_ms: int = 5_000,
         max_payload_bytes: int = 262_144,
+        backlog_limit: int = 1_000,
         migration_directory: Path | None = None,
     ) -> None:
         if not 0 <= busy_timeout_ms <= 60_000:
             raise ValueError("busy_timeout_ms must be between 0 and 60000")
         if not 1 <= max_payload_bytes <= 16_777_216:
             raise ValueError("max_payload_bytes is outside the supported range")
+        if not 1 <= backlog_limit <= 10_000_000:
+            raise ValueError("backlog_limit is outside the supported range")
         self._database_path = Path(database_path)
         self._busy_timeout_ms = busy_timeout_ms
         self._max_payload_bytes = max_payload_bytes
+        self._backlog_limit = backlog_limit
         self._migration_directory = migration_directory
 
     def enqueue(
@@ -194,6 +218,14 @@ class EnqueueRepository:
                     replay=True,
                 )
 
+            queued_count = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM jobs WHERE state = 'queued'"
+                ).fetchone()[0]
+            )
+            if queued_count >= self._backlog_limit:
+                raise BacklogFull("queued job backlog limit has been reached")
+
             queue_seq = int(
                 connection.execute(
                     "SELECT COALESCE(MAX(queue_seq), 0) + 1 FROM jobs"
@@ -237,6 +269,10 @@ class EnqueueRepository:
             if connection.in_transaction:
                 connection.rollback()
             raise
+        except BacklogFull:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
         except (MigrationError, sqlite3.Error) as exc:
             if connection.in_transaction:
                 connection.rollback()
@@ -245,6 +281,48 @@ class EnqueueRepository:
             ) from exc
         finally:
             connection.close()
+
+    def get_status(self, *, job_id: str, source_principal: str) -> JobStatus | None:
+        """Read safe metadata scoped to the authenticated caller; never select payload."""
+
+        if not database_is_ready(
+            self._database_path,
+            migration_directory=self._migration_directory,
+        ):
+            raise DatabaseNotReady("SQLite is not ready for status reads")
+        try:
+            uri = self._database_path.resolve().as_uri() + "?mode=ro"
+            connection = sqlite3.connect(uri, uri=True, timeout=self._busy_timeout_ms / 1_000)
+            connection.row_factory = sqlite3.Row
+            try:
+                verify_migration_state(
+                    connection,
+                    migration_directory=self._migration_directory,
+                )
+                row = connection.execute(
+                    "SELECT job_id, operation, state, effect_certainty, queue_seq, "
+                    "created_at_ms, updated_at_ms, finished_at_ms FROM jobs "
+                    "WHERE job_id = ? AND source_principal = ?",
+                    (job_id, source_principal),
+                ).fetchone()
+            finally:
+                connection.close()
+        except (MigrationError, sqlite3.Error) as exc:
+            raise DatabaseNotReady("SQLite status read failed") from exc
+        if row is None:
+            return None
+        return JobStatus(
+            job_id=str(row["job_id"]),
+            operation=str(row["operation"]),
+            state=str(row["state"]),
+            effect_certainty=str(row["effect_certainty"]),
+            queue_seq=int(row["queue_seq"]),
+            created_at_ms=int(row["created_at_ms"]),
+            updated_at_ms=int(row["updated_at_ms"]),
+            finished_at_ms=(
+                int(row["finished_at_ms"]) if row["finished_at_ms"] is not None else None
+            ),
+        )
 
     def _commit_transaction(self, connection: sqlite3.Connection) -> None:
         """Commit seam kept overridable for subprocess crash-boundary tests."""
