@@ -1,41 +1,36 @@
-# Raport Checkpoint 5A — validare runtime backup și restore Rendiv
+# Raport Etapa 6A — worker local simulat Rendiv
 
 - **Data:** 2026-10-11
-- **Subiect:** Validare Docker izolată a backupului SQLite, verificării, restaurării și monitorizării Etapei 5
-- **Repository înainte de lucru:** curat la `23bd766` (`Add Rendiv SQLite backup and monitoring`). Schema verificată: migrațiile `0001_bootstrap` și `0002_jobs_and_events`, schema version 2. Nicio migrație istorică nu a fost modificată.
-- **Domeniu:** Exclusiv Rendiv și resurse Docker temporare unice. Nu s-au accesat baze/volume reale, nu s-a făcut deployment și nu s-au atins Pithagoras, Understory, llama.cpp, Home Assistant sau alte servicii.
+- **Subiect:** Worker FIFO local, cu executor fictiv injectabil și fără dispatch extern
+- **Repository înainte de modificări:** curat la `1e277a2` (`Document Rendiv 5A runtime commands`); statusul Git a fost verificat înainte de editare.
+- **Commit implementare:** `bd977f2` (`Add isolated Rendiv local worker`), cu worker, teste și jurnal de dezvoltare. Raportul curent este publicat separat conform regulii repository-ului.
+- **Domeniu:** Numai workerul local, testele izolate și documentația de progres/raport. Fără Docker/Compose, deployment, servicii permanente, baze persistente reale, apeluri MCP, AI sau modificări de infrastructură.
 
-## Preflight și izolare
+## Implementare
 
-- Docker CLI/daemon: 29.8.2; Docker Compose: 5.6.0. Inventarele inițiale de containere, rețele, volume și imagini au fost înregistrate înainte de creare; proiectul `rendiv-5a-mv40znicmptf4j` și tag-ul `rendiv-cp5a:mv40znicmptf4j` nu existau.
-- Configurația Compose randată a avut un singur serviciu API, fără porturi publicate, fără socket Docker și fără rețele existente. Rețeaua dedicată `rendiv-5a-mv40znicmptf4j_rendiv-private` era internă. Volumele dedicate au fost `rendiv-5a-mv40znicmptf4j-data`, `rendiv-5a-mv40znicmptf4j-backup` și `rendiv-5a-mv40znicmptf4j-restore`.
-- Buildul imaginii Rendiv de test a trecut cu dependențele blocate. A necesitat internet pentru imaginea de bază și descărcarea pachetelor. Python 3.12.15 slim Bookworm s-a rezolvat în acest build la digestul observat `sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258`; referința OCI din configurație nu este fixată prin digest.
-- Inspectarea containerului a confirmat UID/GID `10001:10001`, root filesystem read-only, fără port host și numai mount-urile RW dedicate. Rețeaua internă conținea doar containerul testului.
+- `rendiv_api.worker.LocalWorker` procesează joburile în ordinea `queue_seq`. Este pornit numai prin apel explicit și cere un executor injectat; API-ul, lifespan-ul FastAPI, Dockerfile și Compose nu pornesc workerul. Nu există executor pentru Understory sau alt serviciu extern.
+- Claim-ul folosește `BEGIN IMMEDIATE`, verifică readiness/checksum-urile migrațiilor și selectează primul job `queued`. Schimbarea `queued -> running` și evenimentul append-only `worker_claimed` sunt în aceeași tranzacție. Nicio tranzacție SQLite nu rămâne deschisă pe durata executorului.
+- Tranzițiile sunt permise explicit: `queued -> running`; apoi `running -> succeeded`, `failed` ori `unknown`. Certitudinea efectului este validată împreună cu tranziția: running/unknown=`unknown`, succeeded=`complete`, failed sigur=`none`. UPDATE-ul jobului și INSERT-ul evenimentului se comit atomic; o eroare la audit face rollback la ambele.
+- Toate instanțele worker pentru aceeași bază trebuie să obțină lock exclusiv POSIX prin fișier adiacent `*.worker.lock`, ținut pe durata execuției. Dacă lockul este ocupat, nu este privat/verificabil sau baza nu este ready, workerul refuză procesarea. Înainte de claim se verifică și absența oricărui `running` neașteptat.
+- După obținerea lockului la pornire, orice rând rămas `running` este trecut atomic la `unknown`, `effect_certainty=unknown`, cu eveniment `recovered_running_as_unknown`. Starea `unknown` blochează restul cozii. Timeoutul, excepțiile normale și rezultatul ambiguu devin `unknown`; workerul nu reîncearcă. Numai rezultatul explicit simulat `FAILED_NO_EFFECT` produce `failed/none`.
+- Nu s-a adăugat migrație: schema implementată v2 și auditul existent sunt suficiente pentru această etapă. `worker_gate` și `job_attempts` apar în documentele de design ca propuneri, nu fac parte din schema curentă.
 
-## Rezultate runtime
+## Dovezi și teste
 
-- Au fost create două joburi sintetice prin API cu bearer fictiv. POST a răspuns queued, GET a expus doar metadate. Containerul API a fost recreat cu același volum de date; readiness a trecut, replay-ul ambelor cereri a identificat joburile existente, iar statusurile au persistat ca queued.
-- Mecanismul real `rendiv_api.backup` a creat backupul din DB activă prin SQLite Online Backup API, în volumul separat. Comenzile `create`, `verify`, `restore` într-un volum de restore distinct și verificarea bazei restaurate au trecut. Sursa, backupul și restore-ul au avut schema/checksum de migrații identice și același conținut logic: schema 2, două joburi queued și două evenimente de audit.
-- Monitorizarea read-only a raportat queued=2, backlog=2 și unknown=0. Hashurile logice ale schemei, joburilor și evenimentelor înainte și după citirea monitorizării au coincis; baza nu s-a modificat.
-- Teste negative sub UID/GID 10001: backup corupt refuzat cu eroare controlată; restaurarea către destinație existentă refuzată fără alterarea octeților existenți; permisiuni de scriere revocate au făcut create și restore să eșueze fără publicarea unui fișier; DB absentă a produs eroare controlată pentru backup și monitorizare.
-- Nu au fost afișate tokenuri, payloaduri sau ID-uri individuale. Nu au avut loc apeluri externe sau operații AI.
+- Executorul fictiv a confirmat FIFO și maxim un apel simultan. Doi workeri concurenți: al doilea a primit `WorkerBusy` și nu a executat job; primul a terminat și a păstrat FIFO.
+- Crash simulată înainte de claim a lăsat jobul queued. Crash în timpul execuției, după claim, a lăsat `running`; pornirea următoare l-a trecut la `unknown` și nu a apelat executorul pentru a-l relua.
+- Timeout, rezultat `unknown`, rezultat invalid și excepție a executorului au blocat coada fără retry. Eșecul injectării evenimentului la claim și la rezultat a verificat rollback-ul atomic și recuperarea conservatoare.
+- DB lipsă/coruptă a oprit workerul înaintea executorului. Testul de rețea a interzis socket connect în timpul execuției fictive. Backupul/restaurarea au păstrat statusul `succeeded`, iar API-ul existent a expus statusul după restore fără payload.
+- Suite completă Etapele 1–6A: **65 teste PASS** cu Python 3.12.3, SQLite temporar și venv `/tmp/rendiv-stage1-venv`.
+- `pip check`: **PASS**, fără dependențe incompatibile. `git diff --check`: **PASS**. Nicio dependență nu a fost instalată global.
 
-## Cleanup și verificări
+## Limite, riscuri și probe pentru operator
 
-- Au fost eliminate numai containerul și rețeaua proiectului unic, cele trei volume de test și imaginea `rendiv-cp5a:mv40znicmptf4j`, prin `docker compose down --volumes --remove-orphans` scoped la proiect și `docker image rm` pe tag-ul temporar. Verificarea după cleanup a găsit zero resurse cu prefixul unic. Fișierele temporare locale din `/tmp/rendiv-5a-mv40znicmptf4j` au fost eliminate.
-- Comenzile runtime pentru build și cleanup au fost `docker compose --env-file /tmp/rendiv-5a-mv40znicmptf4j/test.env -p rendiv-5a-mv40znicmptf4j -f compose.yaml -f /tmp/rendiv-5a-mv40znicmptf4j/compose-override.yaml build --pull --no-cache rendiv-api`, aceeași comandă Compose cu `down --volumes --remove-orphans`, apoi `docker image rm rendiv-cp5a:mv40znicmptf4j`. În container s-au folosit comenzile `python -m rendiv_api.backup create /var/lib/rendiv/rendiv.sqlite3 /checkpoint/backup/checkpoint.sqlite3`, `verify /checkpoint/backup/checkpoint.sqlite3`, `restore /checkpoint/backup/checkpoint.sqlite3 /checkpoint/restore/restored.sqlite3` și `verify /checkpoint/restore/restored.sqlite3`. Fișierul de environment cu bearer fictiv nu a fost publicat.
-- Inventarul Docker post-test a corespuns inventarului inițial pentru containere, rețele, volume și imagini; nu s-au folosit comenzi prune și nu s-au șters resurse existente.
-- Suita completă Etapele 1–5: **53 teste PASS** (Python 3.12.3).
-- `pip check`: **PASS**, fără dependențe incompatibile în venv temporar.
-- `git diff --check`: **PASS** înaintea actualizării raportului; verificarea finală se rulează după documentare.
-
-## Limite și decizii înainte de producție
-
-- Nu au fost validate backupurile persistente reale, retenția/rotația, criptarea la rest, destinația off-host, accesul OS, frecvența, RPO/RTO sau restaurarea pe filesystemul de producție. Acestea necesită decizie și aprobare operațională.
-- Digestul OCI nu este fixat în Dockerfile/Compose; digestul menționat este numai cel observat pentru buildul acestui checkpoint. Buildul offline nu a fost demonstrat și testul a folosit internet.
-- Testul nu a făcut deployment și nu a creat directoare ori baze persistente pe VM. Backupul și restore-ul au existat numai în volume temporare dedicate, eliminate după test.
-- `running`/`unknown` nu au fost generate prin worker; nu există worker sau reconciliere automată. Joburile `running` restaurate după crash nu se reexecută automat, iar `unknown` necesită reconciliere umană pe bază de dovezi înaintea oricărei mutații.
+- Serializarea depinde de filesystem POSIX local cu `flock` și SQLite locking fiabile, de o singură cale comună la DB și de cooperarea tuturor workerilor Rendiv cu același lock. Nu este o garanție între hosturi sau pe NFS/discuri cu semantică de locking neconfirmată. În caz de lock nesigur, workerul trebuie oprit; nu trebuie pornite copii independente.
+- Lockul este extern bazei și nu oferă lease/heartbeat ori gate persistent auditabil în SQLite. Nu există tabel de attempts, reconciliere manuală, schimbare administrativă de stare, supervisor, dispatch real sau metrică publică. `unknown` blochează coada până la o intervenție ulterioară aprobată.
+- Înainte de orice reconciliere umană, operatorul trebuie să examineze evenimentele Rendiv și timestampurile claim/rezultat, să stabilească dacă requestul a părăsit workerul, să caute răspuns/correlation ID și auditul primar al destinației pentru efecte complete/parțiale și să confirme că operația nu mai rulează. Timeoutul sau lipsa răspunsului nu dovedesc no-effect. Dacă probele nu sunt concludente, păstrează `unknown`, nu retrimite și escaladează către owner-ul destinației.
+- Testele folosesc crash și rezultate simulate, nu măsoară efecte sau comportament Understory. Niciun rezultat de test nu confirmă compatibilitatea runtime a unei integrări viitoare.
 
 ## Recomandare
 
-Înainte de producție, aprobă retenția, criptarea, destinația și controlul accesului backupurilor, RPO/RTO și responsabilul de recuperare; fixează imaginea după digest și validează un build offline. Rulează apoi un restore controlat pe o copie izolată a configurației aprobate. Acest checkpoint nu începe Etapa 6.
+Înainte de worker real, aprobă forma unui gate persistat/auditabil și comportamentul de lock pentru topologia de deploy; definește contractul executorului și dovada no-effect a destinației; proiectează un flux operator de reconciliere cu autorizare și audit. Păstrează workerul oprit în API/Compose și nu începe Etapa 6B în cadrul acestei schimbări.
