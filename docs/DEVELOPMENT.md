@@ -10,7 +10,7 @@
 | 4. Implementarea bufferului Rendiv | Acceptare asincronă, procesare serială și integrare cu sistemele sursă/destinație | Neîncepută; nu este autorizată în această etapă |
 | 5. Backup, recuperare și monitorizare | Online backup SQLite, verificare/restaurare izolată și agregate read-only | Încheiată local; numai DB temporare, fără deployment |
 | 6A. Worker local simulat | Claim FIFO serial, tranziții și audit atomic cu executor fictiv | Validată local și într-un container Docker temporar; fără worker automat sau executor extern |
-| 6B. Integrare Understory | Adaptor/protocol fake și audit static al contractului; fără transport real | 6B.2B simulat și 6B.2C aplicat; 6B.2D documentat. Integrarea reală rămâne neîncepută |
+| 6B. Integrare Understory | Adaptor/protocol fake și contract structurat propus; fără transport real | 6B.2B simulat, 6B.2C aplicat, 6B.2D–6B.2F documentate. V1 rămâne propusă; integrarea reală neîncepută |
 
 La inițializarea documentară, etapele de implementare 2–5 nu fuseseră executate. Progresul curent al codului este urmărit separat mai jos.
 
@@ -226,6 +226,13 @@ Rollback-ul operat ulterior trebuie să folosească imaginea anterioară aprobat
 - `docs/design/06-UNDERSTORY-MCP-CONTRACT-V1.md` propune outcome MCP structurat/versionat, corelare request, operation ID per încercare, semantics pentru applied/no_op/partial/rejected_before_write/unknown, fail-closed legacy fallback și matrice Rendiv. Documentul este propunere, nu implementare.
 - Outcome structurat poate clarifica raportul terminal și no-op-ul; nu rezolvă deduplicarea la retry, status după restart, journal efectelor, atomicitate multi-fișier ori durability. Maparea `applied` la `succeeded/complete` necesită aprobarea explicită a semanticii acestei stări.
 - Nu au fost accesate endpoints, environment values, secrete ori conținutul memoriei; nu s-au schimbat Docker sau serviciile și nu s-au rulat teste.
+
+### Checkpoint 6B.2F — revizuirea contractului MCP V1 (2026-10-11)
+
+- Revizuit exclusiv documentar contractul V1: `rejected_before_write` cere acum `execution=not_completed`; schema enumeră exact câmpuri, tipuri, enums și combinații; exemplele și maparea au fost aliniate.
+- `applied` rămâne `unknown/unknown` până la aprobare arhitecturală. `memory_maintain no_op` poate deveni terminal numai după răspuns structurat/corelat/compatibil, build și ramură fără mutație verificate și aprobare. `rejected_before_write` poate deveni `failed/none` numai cu garanție upstream verificabilă că niciun write nu a început.
+- Matricea de teste pozitive/negative per operație, fake MCP transport, SQLite temporar, duplicate/invalide, legacy fallback, blocare FIFO și recovery este doar proiectare; testele nu au fost implementate sau rulate.
+- Deciziile pendinte și gate-urile sunt în `docs/design/06-UNDERSTORY-MCP-CONTRACT-V1.md`. Nu s-au modificat codul executabil, testele, schema, migrațiile sau API-ul și nu s-au accesat Docker/servicii.
 
 ### Dezvoltare locală și teste izolate
 
