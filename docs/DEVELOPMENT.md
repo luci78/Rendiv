@@ -10,7 +10,7 @@
 | 4. Implementarea bufferului Rendiv | Acceptare asincronă, procesare serială și integrare cu sistemele sursă/destinație | Neîncepută; nu este autorizată în această etapă |
 | 5. Verificare și operare | Validarea comportamentului, monitorizare, retry și proceduri de recuperare | Neîncepută |
 
-Etapele 2–5 nu au fost executate. Această sarcină a creat doar documentație.
+La inițializarea documentară, etapele de implementare 2–5 nu fuseseră executate. Progresul curent al codului este urmărit separat mai jos.
 
 ## Decizii și cerințe consemnate
 
@@ -38,6 +38,41 @@ Etapele 2–5 nu au fost executate. Această sarcină a creat doar documentație
 - Separată prioritatea inferenței conversaționale Pithagoras față de Understory de ordinea loturilor din coadă, care rămâne nedecisă.
 - Înregistrată verificarea runtime Understory prin `docker inspect`, precum și faptul că runtime-ul Pithagoras nu a fost reverificat în această etapă.
 - Marcată investigarea detectării activității llama.cpp drept lucru deschis; nu se afirmă că este deja implementată.
+
+## Progres implementare Rendiv API
+
+| Etapă | Rezultat urmărit | Stare |
+|---|---|---|
+| 1. Schelet API | Configurație tipată, health/readiness, migrații SQLite checksum/fail-closed și teste izolate | Încheiată local; fără deployment sau bază persistentă de producție |
+| 2. SQLite + enqueue | Persistență joburi, idempotency și audit | Neîncepută |
+| 3. Status + autentificare | Contract HTTP, ACL și limite | Neîncepută |
+| 4. Runtime izolat | Container și volum propriu | Neîncepută; necesită aprobare separată |
+| 5. Backup și observabilitate | Proceduri și metrici | Neîncepută |
+
+### Etapa 1 — schelet API (2026-10-11)
+
+- Scope: numai aplicație FastAPI, setări non-secrete tipate, `/healthz`, `/readyz` și infrastructură de migrații versionate cu SHA-256 și refuz la checksum/schema neconformă.
+- Testele folosesc fișiere SQLite în directoare temporare; aplicația nu creează automat directorul părinte configurat. Nu se configurează endpointuri de job, enqueue/status, worker, MCP sau acces la servicii externe.
+- Acceptanța locală: 9 teste trecute cu Python 3.12.3; `git diff --check` trece. Dependențele de test au fost instalate numai în `/tmp/rendiv-stage1-venv`; nu a fost pornit serviciul API.
+- Nu s-a creat bază persistentă de producție și nu s-a modificat infrastructură externă. Aplicația nu implementează jobs/enqueue/status sau dispatch.
+
+### Dezvoltare locală și teste izolate
+
+Dependențele și versiunile folosite se instalează într-un mediu virtual local, nu ca serviciu permanent. Testele creează bazele SQLite sub `tmp_path` și nu cer Understory, Pithagoras sau acces la Docker.
+
+```sh
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements-test.lock
+PYTHONPATH=src .venv/bin/python -m pytest -p no:cacheprovider
+```
+
+Pentru a porni manual API-ul în dezvoltare este necesară o cale explicită, temporară, pentru DB; nu folosiți calea persistentă de producție în teste:
+
+```sh
+RENDIV_APP_ENV=development \
+RENDIV_DATABASE_PATH=/tmp/rendiv-development.sqlite3 \
+PYTHONPATH=src .venv/bin/uvicorn rendiv_api.app:create_app --factory
+```
 
 
 ## Etapă de documentare: analiza Pithagoras–Understory
