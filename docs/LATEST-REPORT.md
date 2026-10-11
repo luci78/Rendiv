@@ -1,43 +1,45 @@
-# Raport Rendiv — Checkpoint 6B.2D: audit read-only al contractului Understory
+# Raport Rendiv — Checkpoint 6B.2E: identitate runtime Understory și contract MCP V1
 
 Data: 2026-10-11
 
-## Subiect și domeniu
+## Subiect și metodă
 
-Audit static al contractului local Understory pentru `memory_add`, `memory_update` și `memory_maintain`, cu accent pe dovezile efectelor și pe limitele clasificării Rendiv. Raportul detaliat, cu referințe exacte la fișiere și funcții, este `docs/design/05-UNDERSTORY-CONTRACT-AUDIT.md`.
+Am verificat metadate Docker read-only pentru identitatea runtime Understory și am redactat o propunere de contract MCP structurat/versionat V1. Raportul de proiectare detaliat este `docs/design/06-UNDERSTORY-MCP-CONTRACT-V1.md`.
 
-Sursa locală inspectată: `/home/luci78/ai-stack/understory`, commit `f6c342332f390a444a8669636b1cf8f9669dd995`, curată la verificarea read-only. Acest commit nu confirmă codul sau configurația serviciului activ.
+S-au folosit numai `docker ps`, `docker inspect` formatat și `docker image inspect` formatat, fără câmpuri environment. Nu s-au folosit exec, logs, Compose, build, pull, healthcheck sau endpointuri; nu s-au accesat volumele, secretele ori memoria și nu s-au efectuat operații de schimbare a stării.
 
-## Constatări confirmate în sursa locală
+## Dovezi runtime confirmate
 
-- `memory_add` acceptă `content` și opțional `suggested_path`; `memory_update` acceptă `instruction`; `memory_maintain` primește obiect gol. Primele două trec prin agentul intern și tool-uri de scriere KB.
-- `ok` și `Files changed` constituie succes raportat. Paths înregistrate nu sunt manifest complet și nu dovedesc commit durabil. Scrierea conceptului poate preceda eșecul regenerării indexului sau logului, iar callback-ul poate raporta listă goală în acea situație.
-- Pentru codul local, `memory_maintain` are markerul exact healthy no-op `Memory is healthy — N concepts, N links, no orphans, no broken links. Nothing to repair.` Ramura face lint read-only și revine fără `runMutation`. Markerul este dovadă la nivelul acelei versiuni de cod numai când răspunsul complet este valid și corelat. Adaptorul Rendiv actual nu îl recunoaște, deci persistă `unknown`.
-- `failed`, `isError` sau paths goale nu demonstrează absența efectului; `FAILED_NO_EFFECT` nu poate fi justificat fără dovadă structurată și verificabilă.
-- În traseul inspectat nu există operation ID/status durabil, idempotency upstream, revision per mutație, tranzacție multi-fișier sau receipt de commit. Read-back-ul poate observa conținut curent, dar nu dovedește operația care l-a produs ori durabilitatea.
-- Codul nu configurează timeout explicit pentru mutație și nu propagă anularea la `runMutation`. Fallback-ul de model poate repeta generarea în unele condiții, dar nu oferă idempotency mutației. Timeoutul, retry-urile SDK/provider și comportamentul runtime rămân neconfirmate.
+Containerul observat este `ai-understory`, ID `2cb642db5307f38fb0f43fc41c3298f3b75f6f81fc0c537848ba2a1439bbd6e6`, creat la `2026-10-09T20:41:24Z`. Image reference este `ai-stack-understory`; image ID și repo digest local sunt `sha256:ad0699e1644f7ec75393c3335696be677b05a1c845e917e3a610a3a07f20ba7c`. Imaginea este linux/amd64, creată la `2026-10-09T17:10:41Z`.
 
-## Metodă și limitări
+Containerul pornește cu entrypoint `docker-entrypoint.sh` și argumentele `node server/dist/index.js`; restart policy este `unless-stopped`. Metadatele indică bind mount read-write către `/bundle`, rețeaua `ai-stack_default` și `3800/tcp` publicat pe host `0.0.0.0:3800`. Raportul de proiectare conține sursa mount-ului host; conținutul nu a fost citit.
 
-Au fost citite sursele locale Understory și codul/documentația Rendiv relevantă. Nu s-au executat teste, build, servicii, Docker, HTTP, MCP sau stdio. Nu s-au apelat API-uri read-only deoarece identitatea buildului, autentificarea, bundle-ul activ și riscul de expunere a memoriei nu puteau fi demonstrate. Nu s-au accesat baze de date, secrete sau conținutul memoriei și nu s-a modificat repository-ul Understory.
+Image labels nu conțin OCI source/revision/version. Labelul containerului `com.docker.compose.image` indică un alt digest (`sha256:07615849ff7bade28438d3f3f22b47f301870deea76770735715a14982b04266`) față de image ID-ul inspectat. Această neconcordanță nu a fost investigată prin config Compose și nu poate servi ca proveniență. Tagul și timestampurile nu identifică commitul.
 
-## Recomandare
+Checkout-ul local Understory este curat la commit `f6c342332f390a444a8669636b1cf8f9669dd995`, dar nu există legătură verificabilă între checkout și digest. **Versiunea Understory runtime rămâne NECONFIRMATĂ.**
 
-Păstrați `unknown` și blocarea cozii pentru timeout, disconnect, răspuns invalid/ambiguu, eșec fără proof și succes raportat fără receipt suficient. Primul pas recomandat pentru contractul viitor este un rezultat structurat/versionat cu outcome explicit și operation ID, inclusiv `no_op` numai pentru calea confirmată de maintain. Pentru replay și reconciliere după timeout sunt necesare separat journal durabil, idempotency și status lookup. Read-back-ul singur nu justifică retry sau durabilitate.
+## Contract MCP V1 propus
 
-Decizii necesare înainte de integrarea reală: ce format/versionare va avea outcome-ul; cum se vor lega operation ID, journal și idempotency de efectele filesystem; ce receipt poate susține succes terminal; și cum se verifică versiunea și configurarea serviciului activ fără a expune datele memoriei.
+`docs/design/06-UNDERSTORY-MCP-CONTRACT-V1.md` definește un envelope `structuredContent` cu `contract_version`, `request_id`, `operation_id`, `operation`, `outcome`, `no_op`, `changed_paths` și evidence strict tipizată. Contractul păstrează argumentele existente ale tool-urilor și textul MCP pentru clienții vechi.
+
+Outcome-urile sunt `applied`, `no_op`, `partial`, `rejected_before_write` și `unknown`. Răspunsurile legacy text-only, invalide, necorelate sau contradictorii rămân `unknown` în Rendiv și blochează FIFO. `changed_paths` singur nu este suficient. `applied` ar însemna raport explicit terminal al handlerului, fără afirmație de atomicitate ori durabilitate. Propunerea de a-l mapa la `succeeded/complete` necesită aprobarea semanticii acestei stări înainte de implementare.
+
+Envelope-ul poate clarifica raportarea și corelarea unui exchange și poate exprima no-op explicit. Nu furnizează deduplicare, status după restart, dovadă no-effect după începerea scrierii, journal exhaustiv, atomicitate multi-fișier sau durability. Acestea cer mecanisme upstream separate: journal durabil, idempotency/status și o strategie verificabilă de commit/staging.
+
+## Verificări și limite
+
+- Linkurile locale din documentele Markdown modificate: PASS.
+- Cele cinci exemple JSON din propunerea V1: parse PASS.
+- `git diff --check`: PASS.
+- Nu s-au executat teste; livrabilul este documentație/proiectare și audit read-only.
+- Nu s-a inspectat environment, configuration file extern, build context, filesystem-ul imaginii sau conținutul volumului. Nu s-a verificat MCP/API/LLM runtime.
+- Contractul este propus, neimplementat. Implementarea necesită confirmarea provenance a imaginii, aprobarea outcome-urilor și compatibilității `structuredContent` cu clienții MCP existenți.
 
 ## Fișiere Rendiv
 
-- `docs/design/05-UNDERSTORY-CONTRACT-AUDIT.md` — matricea pe operații, dovezi, clasificări, necunoscute și opțiuni de contract.
-- `docs/DEVELOPMENT.md` — checkpointul și progresul actualizat.
-- `docs/ARCHITECTURE.md` — statusul adaptorului și al markerului no-op aliniat cu DEVELOPMENT.
+- `docs/design/06-UNDERSTORY-MCP-CONTRACT-V1.md` — dovezile runtime și propunerea contractuală.
+- `docs/DEVELOPMENT.md` — progres 6B.2E consemnat.
+- `docs/ARCHITECTURE.md` — starea identității runtime și a proiectării V1 aliniată cu progresul.
 - `docs/LATEST-REPORT.md` — acest raport.
 
-## Verificări
-
-- Documentație: linkurile locale din cele patru fișiere Rendiv modificate au fost verificate; toate țintele există (PASS).
-- `git diff --check`: PASS.
-- Teste: nu au fost rulate; sarcina este audit/documentație read-only și AGENTS.md nu autorizează rularea lor implicită.
-
-Nu a început integrarea reală.
+Nu au fost modificate containere, imagini, rețele, volume, servicii sau cod. Nu începe checkpointul următor.

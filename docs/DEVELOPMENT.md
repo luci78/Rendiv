@@ -219,6 +219,14 @@ Rollback-ul operat ulterior trebuie să folosească imaginea anterioară aprobat
 - Rezultatele, matricea per operație, opțiunile de contract și referințele exacte sunt în `docs/design/05-UNDERSTORY-CONTRACT-AUDIT.md`. Nu au fost apelate API-uri, citite bundle-uri/DB-uri, rulate teste ori accesate servicii active; nu au fost modificate surse externe.
 - Îmbunătățirea recomandată este un rezultat MCP structurat/versionat cu outcome explicit și operation ID; pentru replay/reconciliere după timeout este necesar separat journal durabil cu idempotency și status. Până atunci rezultatele ambigue rămân `unknown` fără retry.
 
+### Checkpoint 6B.2E — identitate runtime și contract MCP V1 (2026-10-11)
+
+- Metadatele read-only Docker au confirmat containerul `ai-understory`, image ID/repo digest `sha256:ad0699e1644f7ec75393c3335696be677b05a1c845e917e3a610a3a07f20ba7c`, restart `unless-stopped`, bind mount RW către `/bundle`, rețeaua `ai-stack_default`, portul host `3800` și comanda `node server/dist/index.js`. Environment, logs și conținutul volumului au fost excluse.
+- Checkout-ul local curat este la `f6c342332f390a444a8669636b1cf8f9669dd995`, dar imaginea nu expune source/revision provenance care să lege digestul de commit. Versiunea runtime rămâne NECONFIRMATĂ.
+- `docs/design/06-UNDERSTORY-MCP-CONTRACT-V1.md` propune outcome MCP structurat/versionat, corelare request, operation ID per încercare, semantics pentru applied/no_op/partial/rejected_before_write/unknown, fail-closed legacy fallback și matrice Rendiv. Documentul este propunere, nu implementare.
+- Outcome structurat poate clarifica raportul terminal și no-op-ul; nu rezolvă deduplicarea la retry, status după restart, journal efectelor, atomicitate multi-fișier ori durability. Maparea `applied` la `succeeded/complete` necesită aprobarea explicită a semanticii acestei stări.
+- Nu au fost accesate endpoints, environment values, secrete ori conținutul memoriei; nu s-au schimbat Docker sau serviciile și nu s-au rulat teste.
+
 ### Dezvoltare locală și teste izolate
 
 Dependențele și versiunile folosite se instalează într-un mediu virtual local, nu ca serviciu permanent. Testele creează bazele SQLite sub `tmp_path` și nu cer Understory, Pithagoras sau acces la Docker.
