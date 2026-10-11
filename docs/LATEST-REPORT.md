@@ -1,61 +1,51 @@
-# Raport runtime Rendiv: inspecție Docker și lacune de implementare
+# Raport runtime Rendiv: acces Docker și lacune rămase
 
 - **Data:** 2026-10-11
-- **Subiect:** Continuarea auditului runtime Pithagoras–Understory pentru containere, configurație AI, timeout MCP, persistență și căi de acces
-- **Domeniu:** Inspecție strict read-only. S-a încercat numai `sudo docker ps` după permisiunea explicită; comanda s-a oprit la cererea parolei. Nu s-au furnizat parole și nu s-a încercat o cale alternativă de acces. Nu au fost executate `docker inspect`, `docker exec`, operații MCP, inferențe, restarturi sau modificări.
+- **Subiect:** Audit read-only al containerelor `ai-pithagoras`, `ai-understory` și `rendiv-studio`
+- **Domeniu:** S-a încercat `docker ps` fără sudo, conform cererii. Docker API a refuzat accesul la socket. Nu s-au rulat `docker inspect`, `docker exec`, comenzi sudo, inferențe sau mutații MCP și nu s-au schimbat containere ori configurații.
 
 ## CONFIRMAT
 
-### Runtime și model
-
-- `sudo docker ps --all --format ...` a afișat solicitarea sudo pentru parola utilizatorului. Sudo a răspuns `a password is required`; comanda a fost întreruptă fără introducerea parolei. Prin urmare, inventarul live de containere nu a fost obținut și `docker inspect` nu a fost rulat.
-- Raportul runtime anterior consemnează verificări GET read-only ale serverului llama.cpp: `/health` a răspuns 200, iar `/v1/models` și `/models` au indicat Qwen3.6-35B-A3B-Q5_K_M disponibil/încărcat la momentul verificării. Acest lucru confirmă starea serverului atunci, nu configurația efectivă a fiecărui client.
-- Contextul și documentația anterioară consemnează că Understory a fost verificat de utilizator prin `docker inspect` cu `LLM_MODEL=Qwen3.6-35B-A3B-Q5_K_M` și endpointul comun llama.cpp. Pithagoras este descris ca folosind aceeași configurație conform contextului anterior, fără reverificare runtime în acel audit. Această etapă nu a putut reconfirma niciuna dintre valori prin Docker.
-- Codul Pithagoras folosește `pi-mcp-adapter@2.18.0`. Opțiunea `requestTimeoutMs` poate fi configurată global sau per server; fără override se aplică implicitul MCP SDK. Contextul proiectului indică 60 s pentru timeoutul implicit, dar configurația efectivă nu a fost verificată.
-
-### Căi MCP și scriere identificate în codul auditat anterior
-
-- Pithagoras expune integrarea Understory prin tool-uri MCP directe, inclusiv mutațiile `memory_add`, `memory_update` și `memory_maintain`. Aceste apeluri nu trec prin coada `exclusive` a serviciului intern folosit de anumite operații ale portalului.
-- Codul Understory oferă MCP streamable HTTP la `/mcp` și transport stdio. Codul mai oferă chat web la `POST /api/chat`, cu agentul și tool-urile sale de citire/scriere; README-ul documentează și intrarea CLI `pnpm agent:mutate`.
-- Acestea sunt suprafețe posibile deduse din cod, nu confirmarea că fiecare client sau rută este activă în containerele curente. Inventarul runtime al clienților nu a fost posibil.
-- Prioritatea de proiectare rămâne: inferența conversațională Pithagoras are prioritate față de procesarea AI Understory pe serverul llama.cpp comun. Prioritatea între loturile bufferului este separată și încă nedecisă. Operațiile Understory deja începute nu trebuie întrerupte brutal.
-
-### Persistență și status
-
-- Codul Pithagoras deschide `portal.db` cu `better-sqlite3` și activează WAL. Recuperarea `RoutineSupervisor` tratează run-urile routines rămase `running` drept `interrupted`; aceasta nu este recuperare pentru o coadă Rendiv.
-- În codul Understory inspectat anterior, `memory_status` descrie starea/health-ul bundle-ului, nu un job de mutație. Traces și `traceId` oferă urme de execuție, nu un contract observat de polling durabil sau idempotency. Nu a fost găsit un contract de idempotency pentru mutațiile Understory.
-- Aceste constatări privesc codul. Montările efective ale containerelor și durabilitatea după restart nu sunt confirmate fără `docker inspect`.
+- Comanda filtrată `docker ps --all` pentru cele trei nume a eșuat cu `permission denied while trying to connect to the Docker API at unix:///var/run/docker.sock`. Nu au fost returnate metadate de container în această etapă.
+- Auditul anterior al codului Pithagoras a identificat integrarea Understory prin tool-uri MCP directe, inclusiv `memory_add`, `memory_update` și `memory_maintain`; aceste apeluri nu trec prin coada internă `exclusive` a serviciului folosit de anumite operații ale portalului.
+- Codul Understory inspectat anterior oferă MCP streamable HTTP la `/mcp`, transport stdio, chat cu capacitate de scriere la `POST /api/chat` și intrarea CLI documentată `pnpm agent:mutate`. Acestea sunt căi posibile în cod, nu confirmarea că sunt active în runtime.
+- Codul Pithagoras folosește `pi-mcp-adapter@2.18.0`; timeoutul `requestTimeoutMs` poate fi stabilit global sau per server. Contextul proiectului indică timeout implicit MCP de 60 s, dar valoarea runtime nu a fost confirmată.
+- Contextul/documentația anterioară consemnează pentru Understory o verificare anterioară a utilizatorului prin `docker inspect`: `LLM_MODEL=Qwen3.6-35B-A3B-Q5_K_M` și endpointul llama.cpp comun. Pithagoras este descris ca folosind aceeași configurație conform contextului, fără reverificare în această etapă.
+- Verificările GET llama.cpp din auditul anterior au raportat modelul Qwen3.6-35B-A3B-Q5_K_M disponibil/încărcat la acel moment. Ele confirmă starea serverului la interogare, nu configurația curentă a fiecărui client.
+- Codul Pithagoras persistă `portal.db` prin `better-sqlite3` cu WAL; aceasta nu confirmă volumele Docker curente și nu reprezintă coada persistentă Rendiv.
+- Cerința de prioritate este: inferența conversațională Pithagoras are prioritate față de procesarea AI Understory pe llama.cpp comun. Prioritatea între loturile bufferului este încă nedecisă. Nu se întrerup brutal operațiile Understory deja începute.
 
 ## NECONFIRMAT
 
-- Numele, imaginile, starea și porturile containerelor Pithagoras și Understory în runtime-ul actual.
-- Valorile actuale `LLM_MODEL` și `LLM_API_BASE_URL` ale ambelor containere. Valoarea Understory rămâne o verificare raportată anterior de utilizator; Pithagoras nu a fost reverificat.
-- Volumele/mount-urile persistente, sursele și destinațiile lor, modul read-write și politica de restart a containerelor.
-- Rețelele Docker, aliasurile, porturile publicate și existența unei rute MCP accesibile între Pithagoras, Understory și alte servicii.
-- Timeoutul MCP efectiv și comportamentul la expirare în configurația runtime. Nu se știe dacă expirarea clientului anulează procesarea Understory sau doar oprește așteptarea clientului; nu s-a provocat un timeout.
-- Inventarul complet al clienților și căilor active de scriere, inclusiv configurările externe care nu apar în codul auditat.
-- Dacă endpointul llama.cpp `/slots` poate identifica sursa unei inferențe sau poate acorda prioritate/rezervare. Verificarea anterioară a fost doar un instantaneu read-only.
-- Existența unei cozi persistente Rendiv, a statusului de job sau a mecanismului de idempotency la destinație.
+- Dacă cele trei containere există, sunt pornite și corespund imaginilor/serviciilor așteptate.
+- Valorile curente `LLM_MODEL` și `LLM_API_BASE_URL` pentru Pithagoras și Understory.
+- Volumele/mount-urile, sursele și destinațiile lor, caracterul persistent și politica de restart.
+- Rețelele Docker comune, aliasurile, porturile publicate și accesibilitatea efectivă a MCP între containere. `/mcp` este o cale din cod, nu un port publicat confirmat.
+- Timeoutul MCP efectiv și comportamentul la expirare. Nu s-a inspectat configurația și nu s-a provocat timeout.
+- Care dintre căile de scriere din cod sunt activate, clienții runtime existenți și eventualele căi suplimentare din configurații externe.
+- Un contract de status pentru mutații în curs sau idempotency la Understory. Auditul de cod anterior nu a găsit un contract de acest tip; nu s-a efectuat verificare runtime.
+- Existența și persistența unei cozi Rendiv implementate.
 
 ## RISC
 
-- Dacă Understory termină o mutație după timeoutul clientului, un retry orb poate dubla efecte; codul inspectat nu oferă o garanție de idempotency observată.
-- Clienții MCP direcți, chat-ul web, CLI-ul și operațiile portalului pot ocoli serializarea unei cozi Rendiv dacă rămân active căi de scriere paralele.
-- `GET /slots` poate ajuta la observarea activității, dar nu rezervă serverul și nu elimină cursa dintre verificare și pornirea unei inferențe conversaționale.
-- Lipsa accesului la Docker lasă necunoscute restart policy, volumele și topologia efectivă; astfel nu se poate afirma că datele cozii sau ale memoriei supraviețuiesc restarturilor containerelor.
-- Oprirea forțată a unei operații Understory deja începute poate lăsa efecte parțiale și contrazice regula de prioritate stabilită.
+- Fără `docker inspect`, nu se poate stabili dacă baza de date, bundle-ul Understory sau viitoarea coadă au mount-uri durabile și cum se comportă la restart.
+- Timeoutul clientului poate lăsa neclar dacă mutația Understory a terminat; retry-ul orb poate duplica efecte în lipsa unei garanții de idempotency.
+- MCP direct, chat-ul web, CLI-ul și API-ul portalului pot ocoli o coadă Rendiv dacă aceste căi rămân active și acceptă scrieri.
+- Numele `/mcp` din cod nu demonstrează conectivitatea de rețea sau publicarea portului.
+- Un sondaj al sloturilor llama.cpp este doar observațional și nu rezervă capacitate pentru Pithagoras. Coordonarea trebuie să împiedice pornirea unor loturi noi când conversațiile au nevoie de inferență, fără a întrerupe operațiile Understory începute.
 
-## Recomandarea minimă pentru Rendiv
+## Recomandări și informații necesare înainte de implementare
 
-1. Mențineți o coadă persistentă Rendiv cu identificator stabil/idempotency key, hash-ul lotului și stări explicite (`queued`, `running`, `succeeded`, `failed`, `unknown`). Alegeți stocarea numai după confirmarea mediului de deploy și a volumului durabil.
-2. Folosiți un singur worker pentru mutațiile Understory și reconciliere după timeout/restart. Nu relansați automat rezultatele ambigue; verificați efectul printr-o cale read-only/status înainte de retry. Cum Understory nu oferă un contract de status/idempotency confirmat, această limitare trebuie rezolvată înaintea retry-urilor sigure.
-3. Inventariați și rutați toate căile active de scriere prin Rendiv, sau documentați explicit bypass-urile care rămân. Înainte de planificare, confirmați rețeaua și accesibilitatea MCP fără a expune credențiale.
-4. Protejați inferența conversațională Pithagoras la admiterea lucrărilor noi pe serverul llama.cpp comun. Nu întrerupeți brutal lucrările Understory deja pornite. Păstrați prioritatea între loturi ca decizie separată încă nedecisă.
-5. Înainte de implementare, obțineți o inspecție Docker autorizată care să confirme selectiv configurația model/endpoint, mounts, restart policy, rețele și porturi, precum și timeout MCP fără afișarea environmentului complet ori a secretelor.
+1. Restabiliți accesul read-only la Docker pentru utilizatorul care rulează auditul, apoi repetați `docker ps` și `docker inspect` cu proiecție strictă a câmpurilor; nu afișați `.Config.Env` integral.
+2. Confirmați mounts, restart policy, rețele, aliasuri și porturi MCP, apoi identificați ce URL/transport MCP folosește efectiv fiecare client.
+3. Determinați timeoutul efectiv din setările Pithagoras fără a citi sau expune tokenuri și stabiliți comportamentul la expirare din contractul client/server.
+4. Inventariați toate căile active de scriere și decideți cum sunt direcționate prin Rendiv sau dezactivate ca bypass-uri.
+5. Înainte de retry automat, definiți reconciliere după rezultat ambiguu și idempotency/status pentru mutații. Stabiliți unde va locui coada persistentă numai după confirmarea volumului durabil și a strategiei de backup/recuperare.
+6. Implementați admiterea cu prioritate pentru cererile conversaționale Pithagoras; păstrați nedecisă politica de ordonare între loturi până la o decizie separată și nu întrerupeți brutal loturile deja începute.
 
 ## Dovezi și verificări
 
-- Consultate regulile din `AGENTS.md` și raportul runtime precedent din `docs/LATEST-REPORT.md`.
-- Încercare runtime curentă: `sudo docker ps --all --format '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'`; sudo a solicitat parola și a răspuns `a password is required`. S-a oprit fără autentificare. Nu s-a rulat `docker inspect`.
-- Dovezile anterioare sunt descrise distinct mai sus; endpointurile llama.cpp au fost interogate numai prin GET, iar codul proiectelor a fost inspectat read-only.
-- Nu au fost citite fișiere `.env`, configurații cu credențiale, loguri private, baze de date sau conținutul memoriei. Nu s-au declanșat inferențe, operații MCP, teste, restarturi sau deployment.
+- Comandă read-only încercată fără sudo: `docker ps --all --filter name=ai-pithagoras --filter name=ai-understory --filter name=rendiv-studio --format ...`.
+- Rezultat: refuz de acces la Docker socket. Din acest motiv, în această rundă nu s-a executat `docker inspect` și nu s-au putut confirma containere, mounts, restart policy, rețele sau porturi.
+- Constatările despre cod și verificările GET menționate mai sus provin din auditul anterior și sunt marcate ca atare; nu au fost repetate aici.
+- Nu au fost citite secrete, variabile de environment în bloc, loguri private, baze de date sau date de memorie. Nu au fost executate operații de scriere, teste, restarturi ori deployment.
