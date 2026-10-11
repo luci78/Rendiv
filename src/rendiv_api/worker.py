@@ -45,6 +45,7 @@ class WorkerOutcome(StrEnum):
 @dataclass(frozen=True)
 class ExecutionResult:
     outcome: WorkerOutcome
+    audit_reason_code: str | None = None
 
 
 class Executor(Protocol):
@@ -127,11 +128,18 @@ class LocalWorker:
                     self._finish(job.job_id, "succeeded", "complete", "worker_succeeded")
                     processed += 1
                     continue
+                reason_code = result.audit_reason_code
                 if result.outcome is WorkerOutcome.FAILED_NO_EFFECT:
-                    self._finish(job.job_id, "failed", "none", "worker_failed_no_effect")
-                    processed += 1
-                    continue
-                self._finish(job.job_id, "unknown", "unknown", "worker_uncertain")
+                    # This legacy outcome carries no verifiable proof object.
+                    # Treat the executor's bare assertion as uncertain.
+                    reason_code = "no_effect_unproven"
+                self._finish(
+                    job.job_id,
+                    "unknown",
+                    "unknown",
+                    "worker_uncertain",
+                    reason_code=reason_code or "worker_uncertain",
+                )
                 processed += 1
                 return WorkerRun(processed=processed, stop_reason="unknown_blocks_queue")
             return WorkerRun(processed=processed, stop_reason="job_limit")
@@ -287,6 +295,18 @@ class LocalWorker:
             raise
         if not isinstance(result, ExecutionResult) or not isinstance(result.outcome, WorkerOutcome):
             return ExecutionResult(WorkerOutcome.UNKNOWN)
+        if result.audit_reason_code not in {
+            None,
+            "reported_success_unverified",
+            "maintain_response_unverified",
+        }:
+            return ExecutionResult(WorkerOutcome.UNKNOWN)
+        if (
+            result.audit_reason_code
+            in {"reported_success_unverified", "maintain_response_unverified"}
+            and result.outcome is not WorkerOutcome.UNKNOWN
+        ):
+            return ExecutionResult(WorkerOutcome.UNKNOWN)
         return result
 
     def _finish(
@@ -295,6 +315,7 @@ class LocalWorker:
         to_state: str,
         effect_certainty: str,
         event_type: str,
+        reason_code: str | None = None,
     ) -> None:
         connection = self._connect_writer()
         try:
@@ -313,7 +334,7 @@ class LocalWorker:
                 effect_certainty=effect_certainty,
                 event_type=event_type,
                 actor_type="system",
-                reason_code=event_type,
+                reason_code=reason_code or event_type,
                 finished=True,
                 prior_updated_at_ms=int(row[0]),
             )

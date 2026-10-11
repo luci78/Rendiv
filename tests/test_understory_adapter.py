@@ -56,7 +56,7 @@ class FakeMcpTransport:
         return json.dumps(self._result(request["id"], text, self.is_error))
 
     @staticmethod
-    def _result(request_id: int, text: str, is_error: bool) -> dict:
+    def _result(request_id: str, text: str, is_error: bool) -> dict:
         return {
             "jsonrpc": "2.0",
             "id": request_id,
@@ -78,10 +78,10 @@ class FakeMcpTransport:
 )
 def test_documented_operation_arguments_serialize_as_mcp_tools_call(operation: str, arguments: dict):
     job = validate_job(operation, arguments)
-    decoded = json.loads(serialize_tool_call(17, job))
+    decoded = json.loads(serialize_tool_call("call-17", job))
     assert decoded == {
         "jsonrpc": "2.0",
-        "id": 17,
+        "id": "call-17",
         "method": "tools/call",
         "params": {"name": operation, "arguments": arguments},
     }
@@ -119,11 +119,12 @@ def test_invalid_arguments_are_rejected_before_transport(operation: str, argumen
         ("memory_maintain", {}),
     ],
 )
-def test_fake_mcp_round_trip_confirms_only_nonempty_reported_file_paths(operation: str, arguments: dict):
+def test_fake_mcp_round_trip_keeps_unverified_reported_paths_unknown(operation: str, arguments: dict):
     fake = FakeMcpTransport()
     adapter = UnderstoryExecutorAdapter(transport=fake)
     result = adapter(operation, arguments)
-    assert result.outcome is WorkerOutcome.SUCCEEDED
+    assert result.outcome is WorkerOutcome.UNKNOWN
+    assert result.audit_reason_code == "reported_success_unverified"
     assert fake.exchange_count == 1
     request = fake.requests[0]
     assert request["method"] == "tools/call"
@@ -133,21 +134,21 @@ def test_fake_mcp_round_trip_confirms_only_nonempty_reported_file_paths(operatio
 
 def test_decoder_rejects_wrong_id_error_envelope_and_invalid_content():
     cases = [
-        json.dumps({"jsonrpc": "2.0", "id": 99, "result": {"content": []}}),
-        json.dumps({"jsonrpc": "2.0", "id": 1, "error": {"code": -1, "message": "failed"}}),
-        json.dumps({"jsonrpc": "1.0", "id": 1, "result": {"content": []}}),
-        json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "image"}]}}),
+        json.dumps({"jsonrpc": "2.0", "id": "old-call", "result": {"content": []}}),
+        json.dumps({"jsonrpc": "2.0", "id": "call-1", "error": {"code": -1, "message": "failed"}}),
+        json.dumps({"jsonrpc": "1.0", "id": "call-1", "result": {"content": []}}),
+        json.dumps({"jsonrpc": "2.0", "id": "call-1", "result": {"content": [{"type": "image"}]}}),
         "{broken",
     ]
     for response in cases:
         with pytest.raises(ValueError):
-            decode_tool_result(response, 1)
+            decode_tool_result(response, "call-1")
 
 
 @pytest.mark.parametrize(
     ("text", "is_error", "expected"),
     [
-        ("Done\n\nFiles changed:\n- /a.md", False, EffectClassification.CONFIRMED_SUCCESS),
+        ("Done\n\nFiles changed:\n- /a.md", False, EffectClassification.REPORTED_SUCCESS),
         ("⚠ Partial mutation: 1 file written.\nFiles: /a.md\nError: stop", False, EffectClassification.UNKNOWN),
         ("Mutation failed: denied", True, EffectClassification.UNKNOWN),
         ("Mutation failed: uncertain", False, EffectClassification.UNKNOWN),
@@ -158,7 +159,9 @@ def test_decoder_rejects_wrong_id_error_envelope_and_invalid_content():
     ],
 )
 def test_result_classification_is_conservative(text: str, is_error: bool, expected: EffectClassification):
-    decoded = decode_tool_result(json.dumps(FakeMcpTransport._result(3, text, is_error)), 3)
+    decoded = decode_tool_result(
+        json.dumps(FakeMcpTransport._result("call-3", text, is_error)), "call-3"
+    )
     assert classify_effect(decoded) is expected
 
 
@@ -202,7 +205,7 @@ def test_mcp_protocol_adapter_uses_no_socket(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(socket, "socket", forbidden_socket)
     fake = FakeMcpTransport()
     result = UnderstoryExecutorAdapter(transport=fake)("memory_maintain", {})
-    assert result.outcome is WorkerOutcome.SUCCEEDED
+    assert result.outcome is WorkerOutcome.UNKNOWN
     assert fake.exchange_count == 1
 
 
@@ -247,7 +250,7 @@ def test_worker_unknown_blocks_queue_and_restart_never_reexecutes(tmp_path: Path
     assert fake.exchange_count == 1
 
 
-def test_worker_audits_demonstrable_success(tmp_path: Path):
+def test_worker_keeps_reported_changed_paths_unknown(tmp_path: Path):
     database = tmp_path / "worker.sqlite3"
     apply_migrations(database)
     job_id = _enqueue(database, "memory_update", "success", {"instruction": "update"})
@@ -255,11 +258,11 @@ def test_worker_audits_demonstrable_success(tmp_path: Path):
 
     assert LocalWorker(
         database, executor=UnderstoryExecutorAdapter(transport=fake)
-    ).run_until_idle() == WorkerRun(processed=1, stop_reason="idle")
+    ).run_until_idle() == WorkerRun(processed=1, stop_reason="unknown_blocks_queue")
     with sqlite3.connect(database) as connection:
         assert connection.execute(
             "SELECT state, effect_certainty FROM jobs WHERE job_id=?", (job_id,)
-        ).fetchone() == ("succeeded", "complete")
+        ).fetchone() == ("unknown", "unknown")
         assert connection.execute(
-            "SELECT event_type FROM job_events ORDER BY event_seq"
-        ).fetchall()[-1] == ("worker_succeeded",)
+            "SELECT event_type, reason_code FROM job_events ORDER BY event_seq"
+        ).fetchall()[-1] == ("worker_uncertain", "reported_success_unverified")

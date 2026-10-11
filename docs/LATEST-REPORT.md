@@ -1,49 +1,42 @@
-# Raport Rendiv — Etapa 6B.2B: transport MCP simulat
+# Raport Rendiv — Checkpoint 6B.2C: aplicarea deciziilor privind certitudinea efectelor
 
 Data: 2026-10-11
 
 ## Subiect și domeniu
 
-A fost adăugat protocolul MCP JSON-RPC în adaptorul Rendiv, cu schimb de mesaje exclusiv prin transport injectat și fake in-memory pentru teste. Nu există client HTTP/stdio și nu a fost contactat Understory.
+Au fost aplicate deciziile operatorului din checkpointul 6B.2C adaptorului Understory simulat și workerului local Rendiv. Auditul complet și matricea pentru cele trei operații sunt în `docs/design/04-EFFECT-CERTAINTY-AUDIT.md`.
+
+Lucrul a fost local, cu transport fake/in-memory și SQLite temporar. Nu s-a folosit Docker, transport HTTP/MCP/stdio real, Understory, Pithagoras, Home Assistant, llama.cpp sau servicii active. Nu s-au accesat secrete.
+
+## Decizii aplicate și efect
+
+- `changed_paths` este succes raportat de Understory, nu dovadă de durabilitate și nici read-back Rendiv. Adaptorul îl lasă `unknown/unknown`, cu eveniment audit `worker_uncertain` și `reason_code=reported_success_unverified`. Jobul blochează FIFO; read-back-ul suplimentar nu este prezentat ca garanție tranzacțională.
+- Workerul convertește `FAILED_NO_EFFECT` fără dovadă structurată și verificabilă în `unknown/unknown`, cu `reason_code=no_effect_unproven`. Simpla valoare enum nu produce `failed/none`. Interfața și contractul local nu conțin acum format sau verificator de proof; nicio dovadă ipotetică nu a fost introdusă.
+- Healthy no-op pentru `memory_maintain` poate fi succes terminal `succeeded/complete` doar pe baza unui răspuns explicit, neambiguu și validabil care confirmă finalizarea fără modificări. Contractul local descrie calea no-op, dar nu oferă un marker textual stabil pentru adaptor. Răspunsul actual fără căi rămâne `unknown/unknown`, cu `reason_code=maintain_response_unverified`, și blochează FIFO.
+- ID-ul UUID per apel JSON-RPC este păstrat numai pentru corelarea răspunsului, nu ca idempotency.
+
+## Compatibilitate arhitecturală și impact
+
+Modelul existent poate exprima aceste rezultate fără migrare sau schimbare API: starea `unknown` păstrează incertitudinea, iar `job_events.reason_code` păstrează cauza fără date de payload. Nu s-au schimbat schema, migrațiile, endpointurile publice, enum-ul stărilor sau Compose.
+
+Impactul de disponibilitate este intenționat și verificat: succesul doar raportat, un no-op fără marker verificabil și orice `FAILED_NO_EFFECT` fără proof blochează coada; nu există retry automat. În consecință, integrarea reală va necesita un proces de reconciliere/operator pentru aceste rezultate, marker no-op validabil și format/verificator de dovadă no-effect înainte de a putea elibera gate-ul în mod sigur.
 
 ## Modificări
 
-- src/rendiv_api/understory_adapter.py: validarea argumentelor documentate, serializarea tools/call, transportul abstract injectabil, decodarea rezultatului MCP și clasificarea conservatoare în ExecutionResult pentru worker.
-- tests/test_understory_adapter.py: peer MCP in-memory, scenarii de protocol, rezultate și integrare cu workerul.
-- docs/DEVELOPMENT.md: progresul Etapei 6B.2B.
-- docs/LATEST-REPORT.md: prezentul raport.
-
-Nu s-au schimbat API-ul Rendiv, schema SQLite, migrațiile, workerul, Dockerfile sau Compose.
-
-## Contract și comportament
-
-Validarea urmează docs/design/03-UNDERSTORY-CONTRACT.md:
-
-- memory_add acceptă content string obligatoriu și suggested_path string opțional.
-- memory_update acceptă instruction string obligatoriu.
-- memory_maintain acceptă doar obiect gol.
-- Câmpuri nedeclarate și valori neconforme sunt respinse înainte de transport.
-
-Adaptorul serializează un JSON-RPC tools/call cu numele tool-ului și arguments, apoi validează versiunea envelope-ului, id-ul corelat și rezultatul MCP text. Singurul transport testat este fake in-memory.
-
-Clasificări:
-- Confirmat succes → numai un răspuns fără isError, fără marker de mutație parțială și cu cel puțin o cale listată în Files changed; se mapează la succeeded/complete. Aceasta este dovada limitată descrisă de contract: metodele de scriere au raportat completare și căi schimbate.
-- Failed/isError fără dovadă no-effect → unknown.
-- Marker partial, text fără căi, Files changed: none, răspuns ambiguu sau răspuns malformed → unknown. Healthy no-op la memory_maintain este unknown deoarece modelul workerului nu are stare no-op cu effect certainty none.
-- Timeout înainte sau după efectul fake → rezultatul executorului timeout, pe care workerul 6A îl persistă unknown.
-- Disconnect/eroare de transport → unknown.
-- Nu există în contract o dovadă generală no-effect; adaptorul nu emite FAILED_NO_EFFECT. Nu există retry sau reconciliere automată.
-
-Workerul 6A nu a fost modificat. Testele de integrare confirmă FIFO existent, audit atomic al tranzițiilor, blocarea cozii la unknown și lipsa reexecuției după repornire.
+- `src/rendiv_api/understory_adapter.py`: `changed_paths` nu mai este clasificat drept succes complet; produce rezultat necunoscut cu reason code static. Răspunsul `memory_maintain` fără căi păstrează reason dedicat și nu este promovat la succes.
+- `src/rendiv_api/worker.py`: rezultatul `FAILED_NO_EFFECT` fără proof devine unknown și blochează coada; codul motivului este validat dintr-o listă fixă înainte de audit.
+- Teste adaptor, worker și audit: verifică matricea fake, job unknown și blocarea FIFO, reason code, lipsa retryului și execuția fără socket.
+- Documentația `docs/design/04-EFFECT-CERTAINTY-AUDIT.md`, `docs/design/01-ARCHITECTURE.md`, `docs/design/01-DATABASE.md`, `docs/design/02-DECISIONS.md`, `docs/ARCHITECTURE.md`, `docs/DEVELOPMENT.md` și acest raport au fost aliniate la deciziile aplicate.
 
 ## Verificări
 
-- Suita completă: 100 teste PASS.
-- pip check: PASS, fără cerințe defecte.
-- git diff --check: PASS.
-- Testul adaptorului blochează crearea socketului; peer-ul fake doar parsează și produce șiruri JSON în memorie.
-- Testele folosesc SQLite temporar. Nu s-au rulat Docker/Compose, servicii, MCP/HTTP/stdio către Understory sau operații externe.
+- Suita completă în venv temporar Python 3.12, cu SQLite temporar și transport fake: **141 passed**.
+- `pip check` în mediul temporar: PASS.
+- `git diff --check`: PASS.
+- Nu s-au modificat infrastructura, serviciile sau contractul Understory; nu s-a început integrarea reală.
 
 ## Limitări înainte de integrarea reală
 
-Contractul local nu oferă receipt durabil, job status, idempotency, confirmare generală de no-effect sau reconciliere. Files changed confirmă numai căile raportate de metode, nu că intenția semantică a fost satisfăcută integral. Rezultatele failed, partial, timeout, disconnect și crash rămân unknown și blochează coada. Potrivirea dintre checkout-ul local Understory și runtime, auth activă, timeouturi și comportamentul de anulare rămân neconfirmate. Integrarea reală necesită aceste garanții și aprobare separată; nu a început în această etapă.
+Contractul Understory inspectat nu oferă receipt durabil, status lookup, idempotency, marker textual stabil pentru no-op ori dovadă verificabilă no-effect. `changed_paths` și read-back-ul nu garantează împreună atomicitate multi-fișier sau persistență durabilă după crash. Până la un contract/proces aprobat, rezultatele ambigue rămân unknown și opresc procesarea.
+
+Checkpointul 6B.2C este finalizat în repository; nu începe integrarea reală sau etapa următoare.

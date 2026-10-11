@@ -7,7 +7,7 @@ The JSON-RPC envelope is MCP framing; no HTTP or stdio client is implemented.
 from __future__ import annotations
 
 import json
-import threading
+import uuid
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
@@ -27,7 +27,7 @@ class Operation(StrEnum):
 
 
 class EffectClassification(StrEnum):
-    CONFIRMED_SUCCESS = "confirmed_success"
+    REPORTED_SUCCESS = "reported_success"
     UNKNOWN = "unknown"
     TIMEOUT = "timeout"
     TRANSPORT_ERROR = "transport_error"
@@ -42,7 +42,7 @@ class JobPayload:
 
 @dataclass(frozen=True)
 class DecodedMcpResponse:
-    request_id: int
+    request_id: str
     text: str
     is_error: bool
 
@@ -86,7 +86,7 @@ def validate_job(operation: str, payload: dict[str, Any]) -> JobPayload:
     return JobPayload(Operation(operation), dict(payload))
 
 
-def serialize_tool_call(request_id: int, job: JobPayload) -> str:
+def serialize_tool_call(request_id: str, job: JobPayload) -> str:
     """Serialize a standard MCP tools/call JSON-RPC request deterministically."""
 
     return json.dumps(
@@ -102,7 +102,7 @@ def serialize_tool_call(request_id: int, job: JobPayload) -> str:
     )
 
 
-def decode_tool_result(serialized_response: str, expected_id: int) -> DecodedMcpResponse:
+def decode_tool_result(serialized_response: str, expected_id: str) -> DecodedMcpResponse:
     """Decode the MCP CallToolResult shape used by the documented handlers."""
 
     try:
@@ -111,7 +111,7 @@ def decode_tool_result(serialized_response: str, expected_id: int) -> DecodedMcp
         raise ValueError("invalid JSON-RPC response") from exc
     if not isinstance(response, dict) or response.get("jsonrpc") != "2.0":
         raise ValueError("invalid JSON-RPC envelope")
-    if type(response.get("id")) is not int or response.get("id") != expected_id:
+    if not isinstance(response.get("id"), str) or response.get("id") != expected_id:
         raise ValueError("MCP response id does not match request")
     if "error" in response:
         raise ValueError("MCP returned a JSON-RPC error")
@@ -147,8 +147,8 @@ def classify_effect(response: DecodedMcpResponse) -> EffectClassification:
         return EffectClassification.UNKNOWN
     if not all(line.startswith("- ") and len(line) > 2 for line in changed.splitlines()):
         return EffectClassification.UNKNOWN
-    # Non-empty changed paths are explicit evidence that write methods resolved.
-    return EffectClassification.CONFIRMED_SUCCESS
+    # This is an Understory report, not independent read-back or durable proof.
+    return EffectClassification.REPORTED_SUCCESS
 
 
 class UnderstoryExecutorAdapter:
@@ -158,14 +158,11 @@ class UnderstoryExecutorAdapter:
         if not callable(getattr(transport, "exchange", None)):
             raise TypeError("an MCP transport with exchange() must be injected")
         self._transport = transport
-        self._id_lock = threading.Lock()
-        self._next_id = 0
 
     def __call__(self, operation: str, payload: dict[str, Any]) -> ExecutionResult:
         job = validate_job(operation, payload)
-        with self._id_lock:
-            self._next_id += 1
-            request_id = self._next_id
+        # JSON-RPC request correlation only; this is not job idempotency.
+        request_id = str(uuid.uuid4())
         request = serialize_tool_call(request_id, job)
         try:
             serialized_response = self._transport.exchange(request)
@@ -178,12 +175,25 @@ class UnderstoryExecutorAdapter:
         except (ValueError, TypeError):
             return self._worker_result(EffectClassification.INVALID_RESPONSE)
         classification = classify_effect(decoded)
+        if (
+            classification is EffectClassification.UNKNOWN
+            and job.operation is Operation.MEMORY_MAINTAIN
+            and not decoded.is_error
+            and "Files changed:\n" not in decoded.text
+        ):
+            return ExecutionResult(
+                WorkerOutcome.UNKNOWN,
+                audit_reason_code="maintain_response_unverified",
+            )
         return self._worker_result(classification)
 
     @staticmethod
     def _worker_result(classification: EffectClassification) -> ExecutionResult:
-        if classification is EffectClassification.CONFIRMED_SUCCESS:
-            return ExecutionResult(WorkerOutcome.SUCCEEDED)
+        if classification is EffectClassification.REPORTED_SUCCESS:
+            return ExecutionResult(
+                WorkerOutcome.UNKNOWN,
+                audit_reason_code="reported_success_unverified",
+            )
         if classification is EffectClassification.TIMEOUT:
             return ExecutionResult(WorkerOutcome.TIMEOUT)
         return ExecutionResult(WorkerOutcome.UNKNOWN)

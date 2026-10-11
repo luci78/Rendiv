@@ -85,7 +85,7 @@ class SimulatedProcessCrash(BaseException):
     """Test-only abrupt termination that leaves a durable running claim."""
 
 
-def test_fifo_serial_execution_and_atomic_transition_audit(tmp_path: Path):
+def test_fifo_serial_execution_and_unproven_failure_blocks_queue(tmp_path: Path):
     database = tmp_path / "worker.sqlite3"
     job_ids = _seed(database, 3)
     executor = FakeExecutor(
@@ -98,25 +98,23 @@ def test_fifo_serial_execution_and_atomic_transition_audit(tmp_path: Path):
 
     result = LocalWorker(database, executor=executor).run_until_idle()
 
-    assert result == WorkerRun(processed=3, stop_reason="idle")
+    assert result == WorkerRun(processed=2, stop_reason="unknown_blocks_queue")
     assert executor.calls == [
         ("memory_add", {"index": 0}),
         ("memory_add", {"index": 1}),
-        ("memory_add", {"index": 2}),
     ]
     assert executor.max_active == 1
     jobs, events = _rows(database)
     assert [row[0] for row in jobs] == job_ids
     assert [(row[1], row[2]) for row in jobs] == [
         ("succeeded", "complete"),
-        ("failed", "none"),
-        ("succeeded", "complete"),
+        ("unknown", "unknown"),
+        ("queued", "none"),
     ]
     assert [row[0] for row in events] == [
         "enqueued", "enqueued", "enqueued",
         "worker_claimed", "worker_succeeded",
-        "worker_claimed", "worker_failed_no_effect",
-        "worker_claimed", "worker_succeeded",
+        "worker_claimed", "worker_uncertain",
     ]
     assert all(event[3] in {"caller", "system"} for event in events)
 

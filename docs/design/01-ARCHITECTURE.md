@@ -53,9 +53,9 @@ Gateway-ul pentru inferențe este o componentă propusă distinctă de worker ș
 1. Workerul verifică poarta globală de mutație. Dacă există job `running` sau rezultat incert care încă poate fi activ în Understory, nu revendică alt job.
 2. În `BEGIN IMMEDIATE`, selectează jobul `queued` conform politicii de ordonare aprobate, îl schimbă în `running`, rezervă poarta, adaugă attempt/event și face commit. Nicio cerere de rețea nu se ține deschisă într-o tranzacție SQLite.
 3. Workerul apelează numai operația Understory autorizată pentru acel job. Payloadul este păstrat ca unitate logică; Rendiv nu îi inventează o taxonomie semantică și nu fragmentează un lot Home Assistant.
-4. La răspuns complet pozitiv, o tranzacție marchează `succeeded`, eliberează poarta și adaugă rezultatul/eventul.
-5. La refuz demonstrabil înainte de orice mutație, marchează `failed` cu `effect_certainty=none` și eliberează poarta.
-6. La timeout, deconectare, crash, răspuns neclasificabil ori rezultat parțial, marchează sau recuperează jobul ca incert/terminal parțial, păstrează istoricul și nu retrimite automat.
+4. Numai o dovadă suficientă pentru finalizarea completă permite o tranzacție `succeeded/complete`; un raport Understory cu `changed_paths` singur este `unknown` și ține poarta ocupată. Read-back-ul poate adăuga dovezi observabile, dar nu dovedește atomicitate sau durabilitate tranzacțională.
+5. `failed/none` este permis numai pentru refuz local înainte de dispatch sau pentru dovadă structurată și verificabilă de no-effect. O simplă clasificare `FAILED_NO_EFFECT` de la executor nu este probă.
+6. La timeout, deconectare, crash, răspuns neclasificabil, no-op maintain fără marker explicit validabil ori rezultat parțial neclar, marchează/recuperează jobul ca `unknown`, păstrează istoricul și nu retrimite automat.
 
 ### Status și reconciliere
 
@@ -130,7 +130,7 @@ Un `GET /slots` poate fi telemetrie auxiliară pentru diagnostic, dacă se confi
 - Procesul API nu așteaptă finalizarea Understory; `GET` status funcționează în timp ce workerul rulează.
 - Două cereri concurente de claim nu pot pune două mutații în zbor; constraint/gate-ul SQLite și auditul demonstrează exclusivitatea.
 - Restartul înainte de dispatch păstrează joburile queued. Restartul după claim nu redespachetează automat jobul; acesta devine `unknown`, iar gate-ul nu eliberează un al doilea job până la reconciliere.
-- Eșecul demonstrat fără efect devine `failed/effect_certainty=none`; răspunsul parțial este înregistrat ca parțial și nu se retrimite; timeoutul/crashul ambiguu devine `unknown` fără retry automat.
+- Refuzul local înainte de dispatch sau dovada structurată/verificabilă no-effect poate deveni `failed/effect_certainty=none`; enum-ul executorului singur nu este suficient. Răspunsul parțial neclar, timeoutul/crashul ambiguu și succesul doar raportat prin `changed_paths` devin `unknown` fără retry. Un no-op maintain devine terminal numai pe baza confirmării explicite, neambigue și validabile că s-a încheiat fără modificări.
 - Fiecare tranziție și intervenție este append-only; payloadurile și credentialele nu apar în loguri, API status sau metrici.
 - Integrarea Pithagoras și Home Assistant returnează job ID fără să aștepte procesarea semantică; batch-urile HA rămân unități logice, iar oversized payload este respins explicit.
 - Testul de acceptanță pentru prioritate demonstrează că o cerere Pithagoras în așteptare precede admiterea unei cereri Understory noi; limita unei cereri Understory deja active este măsurată și documentată. Nu se întrerupe brutal nicio mutație.

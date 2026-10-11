@@ -171,14 +171,14 @@ Un crash între commit-ul de claim și trimiterea efectivă a requestului poate 
 | Dovezi la Rendiv | Stare propusă | `effect_certainty` | Gate |
 |---|---|---|---|
 | Validare/auth/refuz local înainte de dispatch | `failed` | `none` | liber |
-| Understory dovedește eșec terminal fără efect | `failed` | `none` | liber |
-| Understory confirmă succes complet | `succeeded` | `complete` | liber |
-| Understory răspunde că unele fișiere au fost scrise înainte de eșec | `failed` (detaliu partial) | `partial` | liber numai dacă răspunsul confirmă că handlerul s-a încheiat |
+| Dovadă structurată și verificabilă de eșec terminal fără efect | `failed` | `none` | liber |
+| Dovadă suficientă confirmă finalizarea completă; `changed_paths` singur nu ajunge | `succeeded` | `complete` | liber |
+| Understory raportează efect parțial, dar nu există rezultat terminal verificabil | `unknown` | `unknown` | ocupat/incert; reconciliere umană |
 | Timeout, conexiune pierdută, crash după intent sau răspuns imposibil de clasificat | `unknown` | `unknown` | incert/ocupat |
 | Operatorul confirmă aplicarea completă după read-back | `succeeded` | `complete` | liber |
 | Operatorul confirmă no-effect și lipsa unei execuții active | `failed` sau `queued` după decizie explicită | `none` | liber după audit |
 
-Un eșec HTTP/MCP nu este implicit „fără efect”: doar un contract verificat care garantează lipsa efectului permite `effect_certainty=none`. Pentru răspunsul parțial Understory, state-ul terminal tehnic este `failed`, dar operatorul vede clar efectul `partial`; acel job nu se reia automat.
+Un eșec HTTP/MCP sau enum-ul executorului nu este implicit „fără efect”: doar o dovadă structurată și verificabilă care demonstrează lipsa efectului permite `effect_certainty=none`. `changed_paths` este succes raportat, nu read-back sau dovadă de durabilitate, deci singur nu permite `succeeded/complete`. Un răspuns parțial fără certitudine că execuția s-a terminat rămâne `unknown`. Healthy no-op la maintain poate fi `succeeded/complete` numai dacă răspunsul explicit, neambiguu și validabil confirmă încheierea fără modificări; în lipsa unui marker verificabil rămâne `unknown`. Read-back-ul poate aduce dovadă suplimentară, dar nu garantează atomicitate ori persistență durabilă.
 
 ### Recuperare și reconciliere
 
