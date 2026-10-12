@@ -1,8 +1,8 @@
-# Contract MCP Understory V1 — propunere
+# Contract MCP Understory V1 — statut și reguli aprobate
 
-- **Checkpoint:** 6B.2E
-- **Stare contract:** PROPUS; neaprobat pentru producție. Validator offline independent adăugat în checkpointul 6B.2G; nu este integrat în adaptor/worker
-- **Data:** 2026-10-11
+- **Origine:** contract propus în 6B.2E, revizuit prin deciziile 6B.2K-A
+- **Stare:** regulile acestui checkpoint sunt **APROBATE pentru implementare offline**; contractul și integrarea rămân **NEAPROBATE pentru producție**. Validatorul offline din 6B.2G nu este integrat în adaptor/worker.
+- **Data:** 2026-10-12
 - **Domeniu:** răspunsurile operațiilor `memory_add`, `memory_update`, `memory_maintain` și maparea lor în Rendiv
 - **Bază factuală:** sursele locale și limitele din `03-UNDERSTORY-CONTRACT.md` și `05-UNDERSTORY-CONTRACT-AUDIT.md`; runtime-ul este raportat separat mai jos
 
@@ -40,15 +40,14 @@ Nu au fost citite configuri de build externe sau fișiere care pot conține secr
 
 ## 2. Statut și principii
 
-Contractul de mai jos este **PROPUS** și neaprobat pentru integrare. Validatorul independent `src/rendiv_api/mcp_contract_v1.py` și testele sale offline validează fixtures conform propunerii; nu conectează adaptorul sau workerul și nu implementează comportamentul Understory. Nicio regulă nu este APROBATĂ pentru schimbarea codului Understory ori integrarea Rendiv. Secțiunea runtime consemnează numai rezultatele 6B.2E; checkpointurile 6B.2F/6B.2G nu au accesat Docker sau servicii.
+Deciziile operatorului din checkpointul 6B.2K-A aprobă implementarea offline a regulilor din această revizie, fără schimbări la persistență și fără integrare Rendiv. Aprobarea nu este deployment approval: niciun rezultat nu deblochează FIFO, iar regulile de tranziție terminală rămân fail-closed. Validatorul independent `src/rendiv_api/mcp_contract_v1.py` și testele lui sunt cod local Rendiv și nu sunt actualizate în acest checkpoint documentar. Secțiunea runtime consemnează numai dovezile istorice 6B.2E; identitatea buildului activ rămâne neconfirmată.
 
-V1 propune un obiect `structuredContent` în rezultatul MCP `tools/call`, păstrând textul `content` pentru clienții existenți. Argumentele actuale ale tool-urilor rămân neschimbate.
+V1 definește un obiect `structuredContent` în rezultatul MCP `tools/call`, păstrând textul `content` și semantica legacy `isError` pentru clienții existenți. Deciziile sunt aprobate pentru implementare offline; nu schimbă argumentele tool-urilor și nu aprobă integrarea de producție.
 
 - ID-ul JSON-RPC corelează un exchange request/response.
 - `operation_id` identifică o încercare Understory, dar nu e idempotency key și nu oferă status după restart.
-- `outcome=applied` este succes raportat, nu dovadă de efect complet, finalizare semantică, atomicitate sau durabilitate.
-- Rendiv mapează `applied` la `unknown/unknown` până la o aprobare arhitecturală explicită.
-- Numai `memory_maintain` poate ajunge la `succeeded/complete` pentru `no_op`, după toate condițiile stricte definite mai jos și după aprobarea contractului.
+- `applied` nu se emite pentru mutații în această versiune: V1 nu transportă dovada durabilă cerută. Rendiv păstrează orice raport insuficient demonstrat la `unknown/unknown`.
+- Numai `memory_maintain` poate raporta `no_op`, exclusiv pe ramura healthy demonstrabilă; acest rezultat singur nu terminalizează jobul Rendiv. O mapare production la `succeeded/complete` necesită aprobare separată.
 - Rezultat legacy, invalid, contradictoriu, necorelat sau insuficient demonstrat produce `unknown/unknown`, blochează FIFO și nu este reîncercat automat.
 
 ### Argumentele tool-urilor existente
@@ -63,7 +62,7 @@ V1 nu schimbă aceste arguments. Contractul de rezultat nu inventează semantica
 
 ## 3. Schema V1 și validare strictă
 
-Rezultatul propus este un JSON object cu `additionalProperties=false` la nivelul envelope-ului și `evidence`. După parsare trebuie să fie un singur obiect, fără chei duplicate la orice nivel. Compararea cheilor și enums este case-sensitive.
+Rezultatul aprobat pentru implementare offline este un JSON object cu `additionalProperties=false` la nivelul envelope-ului și `evidence`. După parsare trebuie să fie un singur obiect, fără chei duplicate la orice nivel. Compararea cheilor și enums este case-sensitive.
 
 ### Câmpuri de top-level
 
@@ -80,6 +79,8 @@ Rezultatul propus este un JSON object cu `additionalProperties=false` la nivelul
 | `reason_code` | condițional, string enum | Obligatoriu pentru `partial`, `rejected_before_write`, `unknown`; interzis pentru `applied` și `no_op`; numai allowlist V1 de mai jos |
 
 `request_id` este identic valoric cu ID-ul JSON-RPC, nu cu `operation_id`. V1 acceptă JSON-RPC IDs string sau integer sigur; implementarea clientului trebuie să păstreze tipul și valoarea exactă.
+
+**Conversia paths aprobată:** serializarea V1 transformă numai un path bundle-relative canonic Understory cu exact un slash sentinel inițial, de forma `/concepts/x.md`, în `concepts/x.md`. Nu elimină slash-uri dintr-un path absolut de sistem și nu schimbă valoarea internă ori textul legacy. Respinge slash-uri inițiale multiple, path gol, drive/UNC paths, `.`/`..`, backslash, NUL, newline și orice path care nu poate fi dovedit bundle-relative. Apoi sortează și verifică unicitatea. Conversia este doar normalizare de reprezentare; nu este dovadă de scriere, completitudine sau durabilitate.
 
 ### Câmpuri `evidence`
 
@@ -101,13 +102,13 @@ Toate câmpurile de aici sunt obligatorii, string enums, fără valori libere:
 
 | Outcome | `execution` | `execution_path` | `effect` | `effect_scope` | Paths | Alte reguli |
 |---|---|---|---|---|---|---|
-| `applied` | `completed` | `mutating` | `reported_applied` | `reported_paths_only` sau `operation_scope` | zero sau mai multe | `no_op=false`; fără `reason_code`; read_back nu poate fi `observed_mismatch`; atomicity/durability `not_asserted` |
+| `applied` | `completed` | `mutating` | `reported_applied` | `reported_paths_only` sau `operation_scope` | zero sau mai multe | `no_op=false`; fără `reason_code`; read_back nu poate fi `observed_mismatch`; atomicity/durability `not_asserted`. Forma rămâne rezervată; sursa actuală nu o emite pentru operații mutative fără dovadă durabilă, iar V1 nu are câmp pentru acea dovadă |
 | `no_op` | `completed` | `healthy_no_op` | `reported_none` | `operation_scope` | exact `[]` | Numai `memory_maintain`; `no_op=true`; fără `reason_code`; read_back nu poate fi `observed_mismatch`; ramura trebuie demonstrată fără mutație |
 | `partial` | `completed`, `not_completed` sau `unknown` | `mutating` sau `unknown` | `reported_partial` | `reported_paths_only`, `operation_scope` sau `unknown` | orice listă de paths valide | `no_op=false`; `reason_code` obligatoriu; nu afirmă că manifestul e exhaustiv |
 | `rejected_before_write` | exact `not_completed` | exact `rejected_pre_write` | `reported_none` | `operation_scope` | exact `[]` | `no_op=false`; `reason_code` obligatoriu; garanție verificabilă upstream că niciun write nu a început |
 | `unknown` | orice enum | `mutating` sau `unknown` | `reported_applied`, `reported_none`, `reported_partial` sau `unknown` | `reported_paths_only`, `operation_scope` sau `unknown` | orice listă validă | `no_op=false`; `reason_code` obligatoriu; nu produce tranziție terminală de succes/eșec; se aplică toate invariant-urile de mai jos |
 
-În orice outcome, `atomicity` și `durability` rămân `not_asserted`. Pentru `no_op` și `rejected_before_write`, `read_back` poate fi numai `not_performed` sau `unknown`; o observație read-back nu face parte din proba acestor răspunsuri. Combinațiile neenumerate, inclusiv `no_op` incompatibil cu outcome-ul, `applied` cu paths singure dar fără evidence, `rejected_before_write` cu `execution=unknown`, sau `no_op` pe cale `mutating`, sunt invalide și Rendiv le tratează `unknown/unknown`.
+În orice outcome, `atomicity` și `durability` rămân `not_asserted`. Pentru `no_op` și `rejected_before_write`, `read_back` poate fi numai `not_performed` sau `unknown`; o observație read-back nu face parte din proba acestor răspunsuri. Combinațiile neenumerate, inclusiv `no_op` incompatibil cu outcome-ul, `rejected_before_write` cu `execution=unknown`, sau `no_op` pe cale `mutating`, sunt invalide și Rendiv le tratează `unknown/unknown`. Deși schema descrie forma `applied`, producătorul Understory nu emite acest outcome pentru o operație mutativă până când există dovadă durabilă verificabilă și o revizie de contract care o poate reprezenta. În V1 curent `durability` este numai `not_asserted`, deci condiția nu poate fi satisfăcută de envelope-ul V1.
 
 Invariant-uri între câmpurile `evidence` (valabile și pentru `unknown`): `effect=reported_applied` cere `execution=completed` și `execution_path=mutating`; `effect=reported_partial` cere `execution_path=mutating|unknown`; `execution_path=healthy_no_op` poate apărea numai la outcome `no_op`; `execution_path=rejected_pre_write` numai la `rejected_before_write`; `effect=reported_none` cu `effect_scope=operation_scope` este permis numai pentru `no_op` sau `rejected_before_write`. Dacă o dovadă observată nu poate fi reprezentată fără contradicție, envelope-ul nu se emite ca V1 valid și consumerul folosește `unknown` generic cu evidence `unknown`.
 
@@ -123,17 +124,17 @@ V1 permite numai coduri statice, fără mesaj anexat: `invalid_arguments`, `poli
 
 ## 4. Semantica outcome-urilor
 
-- **`applied`:** Understory raportează că handlerul mutativ s-a încheiat cu rezultat aplicat. Paths sunt doar paths raportate. Acest outcome nu dovedește satisfacerea semantică a cererii, completitudinea tuturor efectelor, atomicitate ori durability.
+- **`applied`:** schema descrie forma unui raport de aplicare, dar sursa actuală nu îl emite pentru mutațiile add/update sau maintain fără dovadă durabilă verificabilă. V1 nu are câmp care să poată purta acea dovadă (durability este obligatoriu `not_asserted`), deci outcome-ul este rezervat și nu este disponibil producerului în această revizie. Nici `changed_paths`, nici finalizarea agentului nu substituie dovada.
 - **`no_op`:** handlerul raportează explicit încheierea fără modificări. În V1 combinația `healthy_no_op` este definită doar pentru calea healthy no-op a `memory_maintain`; nu presupune semantics no-op pentru add/update.
-- **`partial`:** Understory observă că o parte a efectului a avut loc sau nu poate raporta o aplicare completă. Paths pot fi incomplete.
-- **`rejected_before_write`:** o respingere terminală înainte de orice scriere. Este singurul outcome V1 care poate justifica `failed/none`, și numai dacă implementarea upstream garantează/enforcează verificabil că write-ul nu a început.
+- **`partial`:** se emite numai când `MutationOutcome.status === "partial"` confirmă explicit că există cel puțin un efect raportat înainte de eșec. Paths rămân `reported_paths_only` și pot fi incomplete; nu afirmă durabilitate.
+- **`rejected_before_write`:** outcome condițional, permis numai cu o ramură de respingere verificată înaintea primului write și cu dovadă verificabilă legată de acel apel/build. Eroarea, `isError`, lista goală sau absența unei căi raportate nu sunt dovadă. Sursa actuală nu are o asemenea dovadă structurată; Understory nu emite acest outcome în implementarea offline aprobată.
 - **`unknown`:** efectul sau finalitatea nu sunt suficient cunoscute. Include timeout, deconectare, crash, răspuns pierdut, rezultat ambiguu și erori după intrarea în calea mutativă.
 
 ## 5. Exemple JSON și conformitate
 
 Exemplele de mai jos sunt fixtures normative pentru validarea structurală și semantică. Toate folosesc `atomicity=durability=not_asserted`.
 
-### Exemplul 1 — `memory_add`, applied raportat
+### Exemplul 1 — `memory_add`, succes raportat dar efect durabil neverificat
 
 ```json
 {
@@ -141,7 +142,7 @@ Exemplele de mai jos sunt fixtures normative pentru validarea structurală și s
   "request_id": "rendiv-call-7f3b",
   "operation_id": "0199c0a4-6b3a-7f20-a019-fc6f1d2a8b01",
   "operation": "memory_add",
-  "outcome": "applied",
+  "outcome": "unknown",
   "no_op": false,
   "changed_paths": ["concepts/example.md"],
   "evidence": {
@@ -152,13 +153,14 @@ Exemplele de mai jos sunt fixtures normative pentru validarea structurală și s
     "read_back": "not_performed",
     "atomicity": "not_asserted",
     "durability": "not_asserted"
-  }
+  },
+  "reason_code": "unknown_internal"
 }
 ```
 
-Structura este validă pentru contract; semantic este doar succes raportat și se mapează la Rendiv `unknown/unknown`.
+Răspunsul agentului și paths sunt raport, nu dovadă durabilă. De aceea envelope-ul emite `unknown`, nu `applied`; Rendiv păstrează `unknown/unknown`.
 
-### Exemplul 2 — `memory_update`, applied raportat fără paths
+### Exemplul 2 — `memory_update`, finalizare agent fără dovadă suficientă
 
 ```json
 {
@@ -166,22 +168,23 @@ Structura este validă pentru contract; semantic este doar succes raportat și s
   "request_id": "rendiv-call-a18c",
   "operation_id": "0199c0a4-6b3a-7f20-a019-fc6f1d2a8b02",
   "operation": "memory_update",
-  "outcome": "applied",
+  "outcome": "unknown",
   "no_op": false,
   "changed_paths": [],
   "evidence": {
     "execution": "completed",
     "execution_path": "mutating",
-    "effect": "reported_applied",
-    "effect_scope": "operation_scope",
+    "effect": "unknown",
+    "effect_scope": "unknown",
     "read_back": "not_performed",
     "atomicity": "not_asserted",
     "durability": "not_asserted"
-  }
+  },
+  "reason_code": "unknown_internal"
 }
 ```
 
-Valid în V1 doar dacă Understory poate susține outcome-ul explicit fără paths; Rendiv rămâne `unknown/unknown` până la aprobare indiferent de paths.
+`runMutation()` poate încheia fără paths; nu se deduce că operația a fost aplicată sau că a fost no-op. Rezultatul rămâne `unknown/unknown`.
 
 ### Exemplul 3 — `memory_maintain`, healthy no-op raportat
 
@@ -206,7 +209,7 @@ Valid în V1 doar dacă Understory poate susține outcome-ul explicit fără pat
 }
 ```
 
-Envelope-ul singur nu e suficient pentru `succeeded`: trebuie versiune contract aprobată și compatibilă, corelare exactă, implementarea/buildul identificat și dovada că această cale a verificat starea fără a intra în nicio ramură de mutație. Până la aceste gate-uri și aprobarea operatorului, Rendiv rămâne `unknown/unknown`.
+Envelope-ul singur nu e suficient pentru `succeeded`: trebuie versiune contract aprobată pentru producție, corelare exactă, implementarea/buildul identificat și dovada că această cale a verificat starea fără a intra în nicio ramură de mutație. Până la aceste gate-uri și aprobarea operatorului pentru producție, Rendiv rămâne `unknown/unknown`.
 
 ### Exemplul 4 — `memory_add`, respins înainte de orice scriere
 
@@ -232,7 +235,7 @@ Envelope-ul singur nu e suficient pentru `succeeded`: trebuie versiune contract 
 }
 ```
 
-Valid structural fixture. `failed/none` este permis numai dacă upstream dovedește/enforcează că reject-ul a avut loc înaintea oricărui write. `isError=true` singur nu este dovadă.
+Fixture structural ipotetic, nu rezultat emis de implementarea actuală: `failed/none` este permis numai dacă upstream dovedește/enforcează că reject-ul a avut loc înaintea oricărui write. `isError=true` singur nu este dovadă; în sursa actuală nu există această ramură cu proof.
 
 ### Exemplul 5 — `memory_add`, rezultat incert raportat de Understory
 
@@ -264,15 +267,16 @@ Toate cele cinci exemple se validează în §10 față de regulile din §3–4. 
 
 ## 6. Maparea Rendiv și blocarea FIFO
 
-| Rezultat | Mapare Rendiv propusă acum | FIFO / retry |
+| Rezultat | Mapare Rendiv | FIFO / retry |
 |---|---|---|
-| `applied`, indiferent de `changed_paths`, dacă envelope-ul e valid | `unknown/unknown` până la aprobare arhitecturală explicită; motiv static `reported_success_unverified` | Blochează, fără retry automat |
-| `no_op` pentru `memory_maintain` valid și toate gate-urile demonstrate | Potențial `succeeded/complete` după aprobarea contractului și semanticii; înainte de gate/aprobare: `unknown/unknown` | Numai după terminalizarea aprobată avansează; fără retry |
+| `applied` structural valid (rezervat; producerul actual nu îl emite fără proof durabil) | `unknown/unknown`; nu se promovează din envelope/paths | Blochează, fără retry automat |
+| `no_op` pentru `memory_maintain` valid și toate gate-urile demonstrate | `unknown/unknown` acum; `succeeded/complete` numai după gate-urile de producție și aprobare separată | Până la terminalizarea aprobată blochează; fără retry |
 | `no_op` pentru `memory_add` / `memory_update` | `unknown/unknown`; semantica no-op nu este confirmată | Blochează, fără retry |
 | `rejected_before_write` valid și upstream guarantee verificată | `failed/none` poate fi permis | Terminal fără retry al aceluiași job; următorul FIFO poate porni |
 | `partial`, timeout, disconnect, crash, `unknown` | `unknown/unknown` | Blochează inclusiv după restart, fără retry |
 | Legacy text-only, malformed, duplicate JSON keys, unknown fields/version, mismatch IDs/operation, contradiction, duplicate/conflicting result | `unknown/unknown` | Blochează, fără heuristic fallback și fără retry |
-| JSON-RPC `error`, MCP `isError=true`, lipsă/mai multe rezultate structured sau rezultat mixt contradictoriu | `unknown/unknown`, cu excepția unui `rejected_before_write` V1 valid transportat ca tool result conform contractului aprobat și verificat | Blochează în toate cazurile nevalidate |
+| JSON-RPC `error`, lipsă/mai multe rezultate structured sau rezultat mixt contradictoriu | `unknown/unknown` | Blochează, fără retry |
+| MCP tool result cu `isError=true` și V1 `unknown` pentru `MutationOutcome.failed` legacy | `unknown/unknown`; textul și flagul legacy se păstrează, flagul nu dovedește no-effect | Blochează, fără retry |
 
 **Semantica `succeeded`:** în Rendiv actual, workerul persistă `succeeded/complete` numai când executorul returnează explicit `SUCCEEDED`. Contractul v1 nu poate autoriza asta prin outcome `applied`; `applied` rămâne unknown. Pentru `memory_maintain` no-op, terminalizarea poate fi luată în considerare numai când toate condițiile sunt adevărate:
 
@@ -291,8 +295,8 @@ Dacă oricare condiție lipsește, rezultatul este `unknown/unknown`. `rejected_
 
 - JSON-RPC 2.0 response trebuie să aibă exact un `id` și exact unul din `result` sau `error`.
 - Pentru rezultat normal de tool, `result` include un singur `structuredContent` object V1; text `content` poate fi prezent ca text display legacy, dar nu este folosit la clasificare.
-- `isError` absent este echivalent cu false. Pentru `applied`, `no_op`, `partial`, `unknown` trebuie false. `rejected_before_write` poate avea `isError=true` numai dacă envelope-ul structured este valid și contractul aprobat definește acel comportament; altfel unknown.
-- JSON-RPC `error` fără `structuredContent` clasifică unknown. Nu extrage outcome din mesajul error.
+- `isError` absent este echivalent cu false. Pentru `applied`, `no_op` și `partial` este false. **Compatibilitate legacy aprobată:** `MutationOutcome.failed` continuă să întoarcă `isError=true` și textul legacy neschimbat; dacă este atașat un envelope V1 `unknown`, combinația este validă și se clasifică tot `unknown/unknown`. `isError=true` nu dovedește no-effect. Pentru `rejected_before_write`, `isError=true` este permis numai cu envelope valid și proof de zero scrieri verificabil; implementarea actuală nu îl emite.
+- JSON-RPC `error` fără `structuredContent` clasifică unknown. Nu extrage outcome din mesajul error. Validatorul Rendiv existent respinge în prezent `isError=true` cu outcome `unknown`; contractul normativ este corectat prin decizia 6B.2K-A, iar paritatea validatorului este un gate separat înaintea integrării, fără schimbare în acest checkpoint.
 - Lipsa răspunsului, zero sau mai multe candidate result envelopes, duplicate/conflict în același exchange, mismatch între JSON-RPC id și `request_id`, mismatch operation, invalid JSON, chei duplicate JSON sau tipuri invalide clasifică unknown.
 
 ### Câmpuri și rezultate invalide
@@ -301,7 +305,7 @@ V1 consumer folosește strict allowlistul de chei din §3. Câmpuri obligatorii 
 
 ### Clienți vechi
 
-Textul `content` poate rămâne pentru afișare clienților existenți. Clientul vechi poate ignora `structuredContent`; această compatibilitate MCP trebuie verificată cu versiunea SDK și fixtures înainte de implementarea Understory. Rendiv care cere V1 nu face fallback semantic la text `Files changed`; toate răspunsurile legacy text-only rămân unknown. Rollout-ul presupus ar fi shadow/fake, apoi compatibilitate verificată; niciun transport real nu este parte din acest checkpoint.
+Textul `content` și valoarea legacy `isError` se păstrează pentru clienții existenți. Clientul vechi poate ignora `structuredContent`; SDK 1.29.0 a demonstrat că cele două câmpuri coexistă. Clientul poate continua să trateze `isError=true` ca eroare de tool, dar nu trebuie să îl interpreteze ca dovadă că nicio scriere nu a avut loc. Rendiv care cere V1 nu face fallback semantic la text `Files changed`; toate răspunsurile legacy text-only rămân unknown. Un timeout/disconnect al transportului poate împiedica livrarea oricărui envelope; în acel caz consumatorul tratează răspunsul absent ca unknown, fără a pretinde că serverul a putut răspunde. Rollout-ul presupus ar fi shadow/fake, apoi compatibilitate verificată; niciun transport real nu este parte din acest checkpoint.
 
 ## 8. Separarea contractului de mecanismele de recuperare
 
@@ -326,17 +330,17 @@ Textul `content` poate rămâne pentru afișare clienților existenți. Clientul
 
 ## 9. Matrice de teste contractuale — doar proiectare
 
-Nicio matrice de mai jos nu a fost implementată sau executată. Implementarea viitoare trebuie să folosească fake MCP transport în memorie, fixtures JSON, SQLite în `tmp_path`, interdicție de socket și fără procese/servicii reale.
+Matricea de mai jos este criteriu proiectat, nu dovadă de teste executate. Implementarea/testele offline aprobate folosesc fake MCP transport în memorie, fixtures JSON, SQLite numai unde se testează separat workerul, interdicție de socket și fără procese/servicii reale. Testele Understory pentru acest checkpoint nu au nevoie de SQLite.
 
 ### Cazuri pozitive per operație
 
 | Fixture | `memory_add` | `memory_update` | `memory_maintain` | Așteptare |
 |---|---:|---:|---:|---|
-| Envelope `applied` valid cu paths | Da | Da | Da, pe calea mutativă | Parser acceptă V1; adapter returnează unknown; job unknown și FIFO blocat |
+| Envelope `applied` structural valid (numai fixture de parser; producerul nu îl emite fără dovadă durabilă) | Da | Da | Da | Parser poate valida forma; source Understory curentă trebuie să emită `unknown`; Rendiv unknown, FIFO blocat |
 | Envelope `applied` valid fără paths | Da | Da | Da | Parser acceptă explicit report-ul; Rendiv unknown, fără inferență din paths |
 | `no_op` healthy branch | Nu se aplică | Nu se aplică | Da | Structural valid; înainte de build gate/aprobare unknown; după gate, testul de mapare poate verifica succeeded/complete fără stare nouă |
-| `rejected_before_write` valid | Da | Da | Da | Parser acceptă; mapare failed/none numai când fixture-ul marchează verificarea enforcement; ulterior jobul terminal |
-| `partial` valid cu și fără paths | Da | Da | Da | Parser acceptă report-ul parțial; worker persistă unknown, FIFO blocat |
+| `rejected_before_write` valid cu proof verificat (parser fixture) | Da | Da | Da | Parser acceptă; Understory actual nu emite; terminalizarea numai după gate/aprobare de producție |
+| `partial` valid cu paths confirmate | Da | Da | Da | Parser acceptă; Understory producer emite numai dacă sursa confirmă efectul parțial; Rendiv unknown, FIFO blocat |
 | `unknown` valid pentru response lost | Da | Da | Da | Worker unknown, coada blocată, fără apel executor repetat la restart |
 
 ### Cazuri negative per operație
@@ -353,7 +357,7 @@ Nicio matrice de mai jos nu a fost implementată sau executată. Implementarea v
 | no_op pe operation/path incompatibil | Da | Da | Da | unknown |
 | partial, timeout înainte/după efect fake | Da | Da | Da | unknown, fără retry |
 | disconnect, crash înainte/după claim, response duplicat/conflict | Da | Da | Da | unknown; recovery nu reexecută |
-| isError fără proof, JSON-RPC error, result lipsă/mai multe | Da | Da | Da | unknown; blochează FIFO |
+| `isError=true` legacy cu V1 unknown, JSON-RPC error, result lipsă/mai multe | Da | Da | Da | unknown; blochează FIFO; niciun indicator nu dovedește no-effect |
 
 ### Integrare fake cu worker/SQLite
 
@@ -372,19 +376,27 @@ Nicio matrice de mai jos nu a fost implementată sau executată. Implementarea v
 - Schema exactă din §3 este implementabilă fără câmpuri ambigue și toate exemplele din §5 trec validarea structurală și combinațiile semantice.
 - Test matrix §9 acoperă fiecare operație, pozitiv/negativ, parser, fake transport, worker, audit, FIFO și recovery.
 - Nicio cale legacy/invalidă nu produce succes sau no-effect fail și nu există retry automat.
-- `applied` rămâne `unknown/unknown` până la decizie arhitecturală explicită.
-- `memory_maintain no_op` și `rejected_before_write` rămân fail-closed până la condițiile de probă și aprobare descrise.
+- Understory nu emite `applied` pentru mutații în această versiune V1; forma este rezervată până când există dovadă durabilă și contractul o poate reprezenta. Rendiv îl păstrează `unknown/unknown`.
+- `memory_maintain no_op` poate fi raportat numai pe ramura healthy demonstrabilă; nu autorizează singur `succeeded/complete`.
+- `partial` necesită confirmarea explicită a sursei; `rejected_before_write` nu se emite fără proof verificabil de zero scrieri.
 
-### Decizii pendinte — nu aprobate implicit
+### Decizii aprobate pentru implementare offline
 
-1. **Semantica `succeeded/complete`:** dacă ar trebui să însemne numai raport terminal upstream sau dovadă mai puternică. Până la decizie, `applied -> unknown`.
-2. **Aprobarea V1 și forma MCP:** suportul exact `structuredContent` în versiunea SDK/runtime compatibilă și comportamentul `isError` pentru reject structurat.
-3. **No-op maintain:** aprobarea mapării terminale după version/build identity, branch proof și read-only code path demonstrat.
-4. **No-effect:** upstream guarantee/enforcement real înainte de primul write, necesară pentru `rejected_before_write -> failed/none`.
-5. **Provenance runtime:** digest containerului trebuie legat verificabil de source revision; checkpointul 6B.2E nu a confirmat această legătură.
-6. **Reconciliere/retry sigur:** journal, idempotency, status și durability/atomicity sunt design separat, în afara V1.
+- `isError=true` și textul legacy se păstrează pentru `MutationOutcome.failed`; V1 `unknown` poate coexista cu acest flag, iar flagul nu are semnificație de no-effect.
+- Paths V1 sunt relative fără slash inițial; numai sentinelul de bundle confirmat se convertește, iar textul și paths interne nu se schimbă.
+- Niciun outcome mutativ nu este `applied` fără proof durabil; V1 actual nu poate transporta asemenea proof, deci producerul emite `unknown`. `partial` cere confirmare explicită; `rejected_before_write` cere proof verificabil de zero scrieri.
+- `memory_maintain no_op` este permis numai pe ramura healthy demonstrabilă fără mutații.
+- Timeout, disconnect, crash și rezultate ambigue rămân unknown; fără retry. Request ID este numai corelare, nu idempotency.
 
-Până la aprobarea deciziilor, acest document rămâne **PROPUS** și nicio tranziție nouă nu este autorizată.
+### Decizii încă neaprobate pentru producție
+
+1. Maparea `memory_maintain no_op -> succeeded/complete`; rămâne unknown în Rendiv până la gate-urile de build/provenance și aprobarea separată.
+2. Emiterea și consumul `rejected_before_write`: sursa actuală nu are proof structurat; contractul nu definește un mecanism independent prin care consumerul să verifice claim-ul.
+3. Orice dovadă de durabilitate și, implicit, utilizarea outcome-ului `applied`; schema V1 actuală are numai `durability=not_asserted`.
+4. Provenance runtime: digestul containerului nu este legat verificabil de revision.
+5. Journal, idempotency, status, recovery, atomicitate, durability, exactly-once sau retry sigur rămân în afara V1.
+
+Contractul este aprobat numai ca țintă pentru implementare și teste offline. Nu aprobă deployment, integrarea live sau tranziții terminale Rendiv.
 
 ## 11. Proveniență și acțiuni
 

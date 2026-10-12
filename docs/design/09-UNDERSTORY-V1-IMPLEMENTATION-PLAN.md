@@ -1,7 +1,7 @@
 # Plan minim de implementare Understory MCP V1
 
 Data: 2026-10-12
-Stare: audit read-only și plan; **fără implementare**.
+Stare: plan actualizat după deciziile aprobate în 6B.2K-A; codul rămâne neimplementat. Aprobarea acoperă exclusiv implementarea și testarea offline, nu producția.
 
 ## Proveniență și domeniu
 
@@ -15,8 +15,8 @@ Stare: audit read-only și plan; **fără implementare**.
 1. Cele trei tool-uri MCP locale întorc `content` text-only. Nu au `structuredContent`, `operation_id` sau envelope V1 (`packages/server/src/mcp/server.ts:67-93,95-144,184-239`). SDK 1.29.0 oferă callbackului `extra.requestId`; V1 îl poate echo fără un argument nou, dar handler-ele Understory nu îl primesc/utilizează explicit în sursa actuală. Confirmarea SDK este în `docs/design/08-MCP-SDK-129-RUNTIME-TEST.md`.
 2. `runMutation()` poate întoarce `ok: true` dacă `generateText()` s-a încheiat chiar dacă `filesChanged` este gol; succesul modelului nu dovedește că s-a făcut o scriere ori că instrucțiunea a fost satisfăcută. Cu căi nevid, acestea sunt căi de concepte raportate de tool-uri, nu manifest exhaustiv sau receipt durabil (`packages/core/src/agent/agent.ts:145-188`; `packages/core/src/agent/tools.ts:85-159`).
 3. Scrierile de concept/index/log sunt apeluri filesystem independente. Nu există rollback sau boundary atomic multi-fișier observat în traseul inspectat. Persistența nu face `fsync`; nu s-a găsit journal de operație, idempotency key sau status lookup în sursele inspectate.
-4. Căile de concepte sunt canonizate intern ca paths bundle-relative **cu slash inițial** (`packages/core/src/okf/bundle.ts:22-55`). V1 și validatorul Rendiv acceptă numai POSIX-relative fără slash inițial (`docs/design/06-UNDERSTORY-MCP-CONTRACT-V1.md:78`; `src/rendiv_api/mcp_contract_v1.py:119-130`). Un adaptor de rezultat trebuie să transforme și să valideze căile înainte de emitere; transmiterea valorii curente direct ar invalida envelope-ul V1.
-5. Există o contradicție de error flag: handlerul comun întoarce `isError: true` pentru `MutationOutcome.status === "failed"` (`server.ts:89-92`), iar V1 cere `isError=false` pentru outcome `unknown` (`06-UNDERSTORY-MCP-CONTRACT-V1.md:294`). `rejected_before_write` poate avea `isError=true` numai după aprobare și proof; eșecul curent nu dovedește absența efectului. Decizia de transport pentru această combinație este **PENDENTĂ**; contractul nu este schimbat aici.
+4. Căile canonice Understory sunt bundle-relative cu slash sentinel inițial (`packages/core/src/okf/bundle.ts:22-55`), iar V1 cere căi POSIX-relative. Decizia aprobată este eliminarea unui singur sentinel numai dintr-un path bundle-relativ valid, apoi validare/sortare/uniqueness; nu se ating paths interne ori textul legacy. Aceasta nu dovedește efect sau persistență.
+5. Decizia `isError` este închisă pentru offline: handlerul păstrează `isError: true` și textul actual la `MutationOutcome.failed` (`server.ts:89-92`); V1 poate atașa outcome `unknown` fără să schimbe indicatorul legacy. Contractul spune explicit că `isError` nu dovedește no-effect. Validatorul Rendiv actual respinge `isError=true` cu orice outcome diferit de rejected (`mcp_contract_v1.py:315-316`); această diferență de cod este documentată pentru o etapă Rendiv ulterioară și nu se schimbă aici.
 6. `memory_maintain` are o ramură healthy explicită: `kb.lint()` determinist citește graful, iar `before.healthy` întoarce mesajul no-op înainte de `runMutation()` (`server.ts:192-203`; `packages/core/src/okf/lint.ts:28-45`). Aceasta este dovadă de ramură fără mutație în checkout-ul local, nu dovadă de build/runtime activ și nu aprobă o tranziție Rendiv terminală.
 
 ## Traseele reale din sursa locală
@@ -82,7 +82,7 @@ Stare: audit read-only și plan; **fără implementare**.
 | `rejected_before_write` | Nu există marker structured pentru reject. O eroare în lint-ul de dinainte poate preceda agentul; o eroare după run poate urma efectului | Nu se poate demonstra generic zero write doar din eroare | `unknown/unknown`; fără `failed/none` |
 | `unknown` | Poate fi orice întrerupere în lint inițial, agent, refreshSeed ori lint final; nu există operation status durabil | Nu | `unknown/unknown` |
 
-`changed_paths` V1 trebuie să fie POSIX-relative, unice și sortate. Path-urile canonical Understory încep cu `/`; helper-ul de conversie este obligatoriu. Deoarece `filesChanged` adaugă numai path-ul conceptului după terminarea întregii metode KnowledgeBase, output-ul trebuie să declare `effect_scope=reported_paths_only`, nu `operation_scope`. Nu se poate adăuga index/log ca și cum ar fi parte din setul actual.
+`changed_paths` V1 trebuie să fie POSIX-relative, unice și sortate. Path-urile canonice Understory încep cu `/`; conversia unui singur sentinel bundle-relative este aprobată. Deoarece `filesChanged` adaugă numai path-ul conceptului după terminarea întregii metode KnowledgeBase, output-ul trebuie să declare `effect_scope=reported_paths_only`, nu `operation_scope`. Nu se poate adăuga index/log ca și cum ar fi parte din setul actual.
 
 ## Atomicitate, durability și recuperare
 
@@ -99,18 +99,16 @@ Stare: audit read-only și plan; **fără implementare**.
 
 ## Plan minim, fișier cu fișier
 
-Planul este recomandare pentru o etapă aprobată ulterior; niciun fișier de cod nu se schimbă acum.
+Implementarea offline de mai jos este APROBATĂ în 6B.2K-A. Acest plan nu autorizează modificarea persistenței, codului Rendiv, serviciilor sau integrarea producției.
 
 ### A. Protocol V1 fără schimbarea persistenței
 
-1. **`/home/luci78/ai-stack/understory/packages/server/src/mcp/server.ts`** — helper comun care primește operation name, `extra.requestId`, outcome observat și căi raportate; construiește `structuredContent` V1 împreună cu păstratul `content` text. Adaugă `extra` în callbackurile registerTool pentru toate trei operațiile. Generează `operation_id` UUIDv7 per încercare, fără pretenție de persistence/idempotency. `memory_maintain` healthy returnează outcome `no_op` numai pe branch-ul explicit. Erorile fără proof rămân outcome `unknown`.
-2. **Același helper de protocol** normalizează căile Understory `/x/y.md` la forma relativă `x/y.md`, apoi verifică paths, unicitate și sortare conform V1. Pentru failed și timeout nu inventează `changed_paths` sau proof; paths sunt numai raportate. `atomicity` și `durability` rămân `not_asserted`.
-3. **Decizie operator înainte de cod** — rezolvați `isError=true` actual pentru `MutationOutcome.failed` față de cerința V1 `unknown -> isError=false`. Nu modificați V1 prin presupunere. Decideți dacă textul de eroare se întoarce ca rezultat normal V1 cu `isError=false`, dacă V1 trebuie revizuit sau dacă error envelope legacy trebuie să rămână fără structuredContent (care în Rendiv rămâne unknown).
-4. **`packages/server/src/mcp/server.ts` tests** — fake `KnowledgeBase`/agent; request ID numeric/string exact; toate operațiile, toate outcome-urile mapabile, no-op maintain numai pe healthy branch, căi cu slash inițial normalizate, text legacy prezent, câmpuri V1 și redacție. Injectați failure după fiecare punct de scriere pentru a confirma că eroarea nu devine rejected-before-write.
-5. **`src/rendiv_api/understory_adapter.py`** — într-un checkpoint Rendiv separat, decodează `structuredContent`, nu textul, și păstrează request ID-ul exterior. API-ul actual `DecodedMcpResponse` conține numai `request_id`, `text`, `is_error` (`understory_adapter.py:43-48,105-130`); forma V1 necesită reprezentarea rezultatului structurat. Integrarea validatorului existent trebuie fail-closed.
-6. **`src/rendiv_api/mcp_contract_v1.py`** — folosire ca validator, fără relaxarea regulilor și fără promovarea `applied`, `no_op` sau `rejected_before_write`. Varianta curentă cere envelope JSON-RPC brut; dacă clientul folosește `Client.callTool()`, planificați wrapper public pe `Transport.send` pentru ID outer sau revizuiți explicit metoda de corelare, nu falsificați un ID.
-7. **`src/rendiv_api/worker.py`** — păstrați tranziția currentă unknown/blocking și crash recovery; dacă se păstrează reason codes V1 în audit, evaluați allowlist-ul `_execute()` (`worker.py:284-310`) deoarece acceptă acum numai câteva motive. Schimbarea trebuie să fie statică/redactată și testată; nu modificați state machine fără decizie separată.
-8. **Teste Rendiv** — adaptor fake → validator → worker → SQLite temporar; `applied`, `partial`, `unknown`, no-op maintain și rejected-before-write rămân `unknown/unknown`; audit atomic, FIFO blocat, zero retry și restart fără reexecuție. Adăugați cazuri de mismatch isError conform deciziei de la punctul 3.
+1. **`packages/server/src/mcp/server.ts`** — helper/constructor pentru envelope care primește numele operației și `extra.requestId`; returnează atât structuredContent cât și textul legacy neschimbat. Callbackurile folosesc API-ul public SDK 1.29.0 și păstrează exact tipul/valoarea request ID-ului. Creează un UUIDv7 real per apel pentru `operation_id`; nu îl prezintă ca idempotency sau status persistent.
+2. Pentru `memory_add` și `memory_update`, precum și ramura mutativă `memory_maintain`, rezultatul normal al agentului, paths sau absența excepției NU justifică `applied`; emite `unknown` cu reason code V1 disponibil, fără a inventa dovadă durabilă. Dacă `MutationOutcome.status === "partial"` și paths confirmate sunt prezente, emite `partial`, paths normalizate cu scope `reported_paths_only`; în caz contrar unknown. `rejected_before_write` nu se emite: codul actual nu oferă proof structurat de zero scrieri. `memory_maintain` emite `no_op` numai în branch-ul `before.healthy`, care se întoarce înaintea agentului și a mutațiilor.
+3. Pentru `MutationOutcome.failed`, păstrează textul exact și `isError: true` legacy, dar adaugă structuredContent `unknown`; nu transforma eroarea MCP în dovadă de no-effect. Pentru success/partial/no-op se păstrează conținutul text actual, fără a-l folosi ca probă.
+4. Path serializer convertește numai bundle paths canonice cu un slash sentinel inițial în POSIX-relative, apoi respinge absolute, traversal, separator/backslash, NUL/newline, path-uri goale și duplicates; sortează listă. Nici paths interne, nici stringurile `content` legacy nu se schimbă. `atomicity`/`durability` rămân `not_asserted`.
+5. **`packages/server/test/mcp/`** — teste fake pentru tool handlers și MCP `InMemoryTransport` cu SDK-ul lockat la 1.29.0. Acoperiți toate trei operațiile, UUIDv7, request ID string/number corelat, content păstrat, structuredContent valid, failed cu isError legacy, partial numai cu efect explicit, healthy no-op, invalid/inconsistent result, timeout/disconnect fără reîncercare și zero acces la rețea/bundle real. Testați că API-ul nu schimbă argumentele tool-urilor.
+6. **Verificare validator Rendiv numai offline** — validați fixtures prin `src/rendiv_api/mcp_contract_v1.py` fără integrare cu worker/adaptor. Implementarea actuală respinge `isError=true` cu outcome `unknown` (`src/rendiv_api/mcp_contract_v1.py:315-316`); acesta este mismatch cunoscut. Paritatea validatorului cere o schimbare Rendiv ulterioară înainte de integrarea reală; acest checkpoint nu modifică Python/tests.
 
 ### B. Ce cere journal durabil, idempotency sau tranzacții
 
@@ -133,21 +131,21 @@ Nu face parte din transport-only V1 și nu poate fi obținut prin adăugarea câ
 - Durabilitate hardware/filesystem fără un protocol și garanții explicite de sync/storage.
 - Că runtime-ul activ folosește exact checkout-ul Understory `f6c342...`; proveniența containerului rămâne neconfirmată.
 
-## Ordinea recomandată și criterii de acceptare
+## Criterii de acceptare pentru implementarea offline aprobată
 
-1. Decideți explicit conflictul `isError` și aprobarea contractului V1; păstrați applied/no-op/rejected în unknown până la gate-urile aprobate.
-2. Implementați helperul Understory și tests fără conectarea workerului real. Acceptare: trei callbacks emit aceleași câmpuri V1 normative; request ID este exact `extra.requestId`; textul rămâne; slash-ul path este normalizat; erorile ambigue nu emit certitudine nejustificată.
-3. Rulați testul MCP server/client cu SDK fixat la 1.29.0 în InMemoryTransport. Acceptare: ambele câmpuri ajung la client, V1 valid se validează, mismatch semantic este respins de validator Rendiv, clientul text-only continuă.
-4. Integrați separat adaptorul Rendiv și workerul fake, apoi numai în etapă aprobată. Acceptare: toate outcome-urile neaprobate persistă unknown, audit atomic, coada blocată, fără retry și fără apel extern în teste.
-5. Proiectați journal/idempotency/transaction într-o etapă distinctă. Nu pretindeți rezolvare până la teste de crash la fiecare boundary și status lookup demonstrat.
+1. Cele trei tool-uri întorc un singur envelope V1 valid plus text legacy neschimbat și nu schimbă inputSchema. `request_id` este exact `extra.requestId`; `operation_id` este UUIDv7 real, dar nu este idempotency/status.
+2. Nicio cale mutativă nu emite `applied` fără dovadă durabilă. V1 curent nu poate codifica dovada, deci add/update și maintain mutativ emit unknown. `partial` apare numai pentru `MutationOutcome.partial` cu paths confirmate. Healthy `memory_maintain` emite no_op numai pe ramura read-only exactă. Nicio ramură curentă nu emite rejected_before_write.
+3. `MutationOutcome.failed` păstrează `content` și `isError=true`; structured result poate avea outcome unknown. Timeout, disconnect, crash și ambiguitate nu declanșează retry.
+4. Paths structurate sunt relative fără slash inițial, validate/sortate și distincte de paths/text legacy; conversia nu este probă de persistență.
+5. Fake/server-client MCP offline confirmă coexistenta content/structuredContent, corelarea și compatibilitatea clientului text-only, fără acces la bundle, rețea sau LLM. Validatorul Rendiv se verifică separat; mismatch-ul `isError=true` actual este consemnat și necesită etapă de cod Rendiv înainte de integrare.
+6. `git diff --check` și toate testele de server relevante trec. Niciun test nu pornește serverul de producție sau accesează memorie reală.
 
-## Decizii rămase
+## Decizii rămase / limite de producție
 
-- **PENDENTĂ:** semantica V1 `isError` pentru error-ul upstream curent.
-- **PENDENTĂ:** aprobarea efectivă a contractului V1 și aprobarea oricărei tranziții `succeeded/complete` sau `failed/none`.
-- **PENDENTĂ:** acceptarea normalizării paths bundle-root (`/a.md`) la path relativ (`a.md`) în `changed_paths`.
-- **PENDENTĂ:** modul de corelare client-side dacă se folosește rezultatul high-level SDK, care nu returnează JSON-RPC ID exterior.
-- **PENDENTĂ:** journal, idempotency, status, recovery, atomicitate și durability; nu sunt implementate.
-- **NECONFIRMAT:** identitatea buildului Understory activ și setarea runtime `GIT_AUTOCOMMIT`.
+- Aprobarea V1 pentru deployment și orice mapare `no_op -> succeeded/complete` ori `rejected_before_write -> failed/none` rămâne separată și neacordată.
+- Nu există proof schema pentru durable applied sau no-effect verificabil independent; niciunul nu este emis.
+- Identitatea/provenance buildului activ Understory rămâne NECONFIRMATĂ.
+- Clientul Rendiv, validatorul său, workerul și FIFO nu se schimbă aici; integrarea reală este etapă separată.
+- Journal, idempotency, status, recovery, atomicitate, durability și exactly-once nu sunt implementate.
 
-Acest document nu schimbă `docs/design/06-UNDERSTORY-MCP-CONTRACT-V1.md`, codul, workerul sau serviciile. Nu începe checkpointul 6B.2K.
+Nu începe integrarea reală sau etapa următoare.

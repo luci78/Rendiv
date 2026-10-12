@@ -1,50 +1,43 @@
-# Raport Rendiv — Checkpoint 6B.2J: audit read-only Understory și plan MCP V1
+# Raport Rendiv — Checkpoint 6B.2K-A: finalizare documentară MCP V1
 
 Data: 2026-10-12
 
-## Domeniu și proveniență
+## Domeniu și starea inițială
 
-Auditul a acoperit checkout-ul Rendiv `/home/luci78/Rendiv-project` și sursa locală Understory `/home/luci78/ai-stack/understory`. La preflight, Rendiv era curat pe `main` la `05945eb65f115fbc683d48b39bf2bf2c45f78e84`, iar Understory era curat pe `main` la commitul exact `f6c342332f390a444a8669636b1cf8f9669dd995`. Concluziile despre implementare se referă numai la acel checkout local. Identitatea buildului Understory activ nu este legată verificabil de commit.
+Rendiv era curat pe `main` la `3d18d7ce74255ff8b881339c8d342b7bde689f88`. Checkout-ul Understory consultat read-only era curat la `f6c342332f390a444a8669636b1cf8f9669dd995`; nu a fost modificat. Nu s-au accesat servicii, Docker, MCP, LLM, memorie, volume sau credentiale.
 
-S-au citit documentația cerută și codul local relevant pentru MCP, agent, write tools, KnowledgeBase, bundle, indexer, logger, lint și trace. Nu s-au accesat servicii, API-uri, MCP, Docker, configurații cu secrete, baze sau conținutul memoriei. Nu s-au rulat teste sau instalări.
+Au fost revizuite instrucțiunile Rendiv și documentele de contract/compatibilitate/plan, precum și sursa locală necesară pentru confirmarea fluxurilor existente. Subsecțiunea `isError` din codul validatorului Rendiv a fost verificată read-only. Nu s-au rulat teste runtime sau instalări.
 
-## Constatări confirmate în codul local
+## Decizii documentate ca aprobate pentru implementare offline
 
-- **Răspuns MCP:** `packages/server/src/mcp/server.ts:67-93` construiește rezultate text-only; failed setează `isError: true`. Handlerele `memory_add` (`:95-127`), `memory_update` (`:129-144`) și `memory_maintain` (`:184-239`) nu emit `structuredContent` și nu propagă `extra.requestId`. SDK 1.29.0 poate furniza `extra.requestId` handlerului conform probei documentate în [08](design/08-MCP-SDK-129-RUNTIME-TEST.md), dar integrarea nu există în sursa inspectată.
-- **memory_add/update:** `packages/core/src/agent/agent.ts:145-188` returnează `ok` la încheierea generatorului chiar și cu lista de paths goală. `packages/core/src/agent/tools.ts:85-159` adaugă path-ul în `filesChanged` numai după ce apelul KB revine. Un concept poate fi scris înainte ca un pas ulterior să eșueze, iar path-ul lui să nu fie înregistrat. Prin urmare paths goale sau eșecul nu demonstrează zero efecte.
-- **Scrieri și efecte secundare:** `packages/core/src/okf/bundle.ts:101-159` folosește scrieri/unlink filesystem directe pentru concepte. `packages/core/src/okf/knowledge-base.ts:76-139` serializează promisiunile în memoria unei instanțe și apoi efectuează prune, regenerare index, append/update log și Git autocommit opțional. Indexerul și loggerul fac operații filesystem distincte (`indexer.ts:12-77`, `logger.ts:12-53`). Traseul inspectat nu arată staging+rename pentru o operație, rollback multi-fișier sau fsync explicit. Git autocommit e best-effort și configurația runtime nu a fost inspectată.
-- **memory_maintain:** `packages/server/src/mcp/server.ts:192-203` verifică lint și, pe ramura healthy, răspunde înainte de `runMutation`; `packages/core/src/okf/lint.ts:28-45` construiește raportul din scanare. Aceasta confirmă ramura fără mutație în checkout-ul local. Nu produce însă răspuns V1 structurat și nu dovedește versiunea runtime activă.
-- **Jurnal și reluare:** traseul inspectat nu oferă operation journal durabil, idempotency pentru apelul logic, status lookup sau recovery/rollback al efectelor. Trace-ul din `packages/core/src/agent/trace.ts:123-149` este best-effort/telemetrie, nu ledger de operații. Timeout, deconectare sau crash pot lăsa efecte parțiale; codul examinat nu permite concluzia că agentul a fost oprit.
-- **Compatibilitate V1:** path-urile canonice din bundle au slash inițial (`bundle.ts:22-55`), pe când contractul V1 cere căi POSIX relative fără slash inițial (`docs/design/06-UNDERSTORY-MCP-CONTRACT-V1.md:78`; validatorul Rendiv `src/rendiv_api/mcp_contract_v1.py:119-130`). Este necesară normalizare și validare înainte de emitere. Există și conflictul explicit dintre `isError: true` al failed curent și regula V1 `unknown` cu `isError: false` (`06-UNDERSTORY-MCP-CONTRACT-V1.md:294`); decizia de protocol rămâne pendinte.
+- `MutationOutcome.failed` păstrează textul și `isError=true` legacy. Un `structuredContent` V1 `unknown` poate coexista cu acest flag; `isError` nu demonstrează lipsa efectelor.
+- `changed_paths` V1 sunt relative POSIX fără slash inițial. Serializarea poate elimina exact un sentinel numai de la un path bundle-relative canonic confirmat; nu schimbă paths interne sau textul legacy și nu pretinde că dovedește persistența.
+- Un rezultat mutativ nu este `applied` fără proof durabil. V1 are `durability=not_asserted` și nu poate transporta acel proof, astfel sursa actuală trebuie să emită `unknown` pentru mutațiile insufficiently demonstrated.
+- `partial` necesită confirmarea explicită a sursei. `rejected_before_write` cere dovadă verificabilă că zero scrieri au început; sursa existentă nu oferă această dovadă și nu trebuie să emită acel outcome.
+- `memory_maintain no_op` este permis numai pe ramura healthy demonstrabilă care revine înaintea agentului și a mutațiilor. Acest envelope nu terminalizează singur un job Rendiv.
+- Timeout, disconnect, crash și rezultate ambigue rămân unknown, fără retry. `request_id` corelează un exchange; nu este idempotency key. `structuredContent` nu este receipt durabil sau garanție exactly-once.
 
-## Matricea efectelor și politica Rendiv
+Aprobarea este exclusiv pentru implementare/testare offline. Nu aprobă producția, deploymentul, `succeeded/complete`, `failed/none`, un retry, sau deblocarea FIFO.
 
-Documentul [09 — planul minim de implementare](design/09-UNDERSTORY-V1-IMPLEMENTATION-PLAN.md) conține matrice separată pentru `memory_add`, `memory_update` și `memory_maintain`, pentru `applied`, `no_op`, `partial`, `rejected_before_write` și `unknown`, cu dovezile actuale și limitele lor.
+## Contradicții corectate și limitări identificate
 
-Politica nu se schimbă: toate rezultatele rămân `unknown/unknown`, FIFO blocat și fără retry automat. `applied` și `changed_paths` sunt raport upstream, nu efect complet/durabil demonstrat. `no_op` pentru `memory_maintain` identifică o ramură locală fără mutație, dar nu primește automat `succeeded/complete`. `failed`, `isError`, excepția, timeoutul, lipsa răspunsului ori lista goală nu justifică `failed/none`; `rejected_before_write` necesită o garanție upstream verificabilă că niciun write nu a început.
+Contractul 06 cerea anterior `isError=false` pentru outcome `unknown`, în conflict cu păstrarea compatibilității legacy la `MutationOutcome.failed`. Documentația permite acum explicit combinația V1 `unknown` plus `isError=true`, fără a o folosi ca probă de no-effect. Exemplele 1 și 2 nu mai prezintă `applied` pentru rezultate fără dovadă durabilă. Regulile paths, tabelele de rezultate, criteriile și planul 09 au fost aliniate.
 
-## Plan minim și decizii
+**Mismatch de integrare cunoscut:** validatorul actual `src/rendiv_api/mcp_contract_v1.py:315-316` respinge `isError=true` dacă outcome-ul nu este `rejected_before_write`. Codul nu a fost modificat la acest checkpoint; alinierea validatorului este necesară separat înainte de integrarea reală. Nu este un blocaj pentru actualizarea documentară.
 
-Planul din documentul 09 separă:
+V1 nu are mecanism verificabil de durable applied sau proof independent de zero writes. Prin urmare outcome-urile respective nu sunt emise de sursa actuală. Identitatea/provenance buildului Understory activ rămâne neconfirmată. Journal, idempotency, status, recovery, tranzacții, atomicitate și exactly-once sunt în afara acestui contract/checkpoint.
 
-1. **Protocol fără schimbarea persistenței:** helper MCP comun în `packages/server/src/mcp/server.ts`, echo exact al `extra.requestId`, `structuredContent` V1 alături de text, operation ID per încercare fără pretenție de durabilitate, normalizarea căilor și teste pentru erori după fiecare boundary de scriere. Rendiv ar necesita separat decodarea structuredContent, validare fail-closed și test fake end-to-end.
-2. **Necesită arhitectură persistentă distinctă:** journal append-only, idempotency stabilă, status/replay după restart, transaction/staging pentru scrieri multi-fișier și fencing pentru operații care ar putea continua după timeout. Un envelope MCP singur nu furnizează aceste garanții.
-3. **Imposibil de demonstrat acum:** lipsa efectului după eroare/timeout; exhaustivitatea paths; semantic-complete, atomicitate sau durability; încetarea agentului după disconnect; deduplicare/reconciliere după restart; proveniența buildului activ.
+## Fișiere modificate
 
-Înainte de orice implementare rămân pendinte aprobarea contractului V1 și conflictul `isError`, politica de normalizare a paths, tranzițiile terminale și orice lucrare de journal/idempotency/transaction. Documentul 09 nu modifică și nu aprobă contractul V1.
+- `docs/design/06-UNDERSTORY-MCP-CONTRACT-V1.md`
+- `docs/design/09-UNDERSTORY-V1-IMPLEMENTATION-PLAN.md`
+- `docs/DEVELOPMENT.md`
+- `docs/LATEST-REPORT.md`
 
-## Fișiere și verificări
+Nu s-au modificat surse Python/TypeScript, teste, migrații, Docker/Compose ori fișiere din Understory.
 
-Au fost modificate exclusiv documentația cerută:
+## Verificări
 
-- `docs/design/09-UNDERSTORY-V1-IMPLEMENTATION-PLAN.md` — trasee cu referințe la surse, matrici per operație, limite și plan în secțiunile A/B/C.
-- `docs/DEVELOPMENT.md` — progresul 6B.2J și avertismentul că V1 rămâne propus.
-- `docs/LATEST-REPORT.md` — acest raport, înlocuind raportul anterior.
+Se execută `git diff --check`, revizuirea exactă a listei fișierelor și o verificare textuală a contradicțiilor cunoscute. Nu se execută teste, servicii sau verificări runtime, conform scope-ului.
 
-Verificările cerute sunt `git diff --check` și linkuri Markdown locale. Nu s-au rulat teste, servicii sau operații externe.
-
-## Publicare și limite
-
-Instrucțiunea checkpointului interzice accesul la rețea. În consecință nu se execută push, fetch sau altă operație de rețea; dacă verificările trec, se poate crea numai commit local pentru cele trei documente. Commit local creat numai pentru cele trei documente. Worktree-ul este curat; `HEAD` este cu un commit înaintea `origin/main` (`05945eb65f115fbc683d48b39bf2bf2c45f78e84`). Prin interdicția de rețea, push-ul nu a fost executat și `HEAD=origin/main` nu este confirmat.
-
-Nu începe checkpointul 6B.2K și nu începe integrarea reală.
+Contractul este țintă aprobată numai pentru implementare offline. Nu începe implementarea 6B.2K-B sau integrarea reală.

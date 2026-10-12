@@ -10,7 +10,7 @@
 | 4. Implementarea bufferului Rendiv | Acceptare asincronă, procesare serială și integrare cu sistemele sursă/destinație | Neîncepută; nu este autorizată în această etapă |
 | 5. Backup, recuperare și monitorizare | Online backup SQLite, verificare/restaurare izolată și agregate read-only | Încheiată local; numai DB temporare, fără deployment |
 | 6A. Worker local simulat | Claim FIFO serial, tranziții și audit atomic cu executor fictiv | Validată local și într-un container Docker temporar; fără worker automat sau executor extern |
-| 6B. Integrare Understory | Adaptor/protocol fake și contract structurat propus; fără transport real | 6B.2B simulat, 6B.2C aplicat, 6B.2D–6B.2J documentate/testate. V1 rămâne propusă; integrarea reală neîncepută |
+| 6B. Integrare Understory | Adaptor/protocol fake și contract structurat propus; fără transport real | 6B.2B simulat, 6B.2C aplicat, 6B.2D–6B.2J documentate/testate; 6B.2K-A aprobă regulile V1 numai pentru implementare offline. Implementarea 6B.2K și integrarea reală rămân neîncepute |
 
 La inițializarea documentară, etapele de implementare 2–5 nu fuseseră executate. Progresul curent al codului este urmărit separat mai jos.
 
@@ -311,3 +311,12 @@ Revizuiește codurile de stare agregate din rezultat. `running` găsit după un 
 - Valorile endpoint/model comun au fost furnizate de utilizator și sunt consemnate în arhitectură; runtime-ul Pithagoras și timeoutul MCP efectiv rămân de verificat. Configurația Understory consemnată anterior nu a fost reverificată în această etapă.
 - Recomandarea păstrează coada în Rendiv, serializează scrierile și joburile de noapte, răspunde asincron cu ID de job, închide căile MCP directe de scriere și marchează timeout/restart ca rezultat incert fără retry automat.
 - Nicio implementare, modificare Pithagoras/Understory, operație de memorie, test sau acces la serviciu activ nu a fost efectuat în această etapă.
+
+
+### Checkpoint 6B.2K-A — finalizare documentară a contractului Understory V1 (2026-10-12)
+
+- Deciziile aprobate pentru implementare offline sunt consemnate în `docs/design/06-UNDERSTORY-MCP-CONTRACT-V1.md` și planul `docs/design/09-UNDERSTORY-V1-IMPLEMENTATION-PLAN.md`; aprobarea nu este pentru producție.
+- `MutationOutcome.failed` păstrează textul și `isError=true` legacy; envelope-ul V1 aferent este `unknown`, iar flagul nu dovedește no-effect. Paths structurate folosesc forma relativă fără slash inițial prin conversia unui singur sentinel bundle confirmat; paths interne și textul legacy nu se schimbă. Conversia nu dovedește persistența.
+- Understory nu emite `applied` fără dovadă durabilă; V1 actual nu o poate reprezenta, deci operațiile mutative insuficient demonstrate rămân unknown. `partial` cere confirmare explicită; `rejected_before_write` cere proof verificabil care lipsește din sursa curentă; `memory_maintain no_op` este limitat la ramura healthy read-only demonstrată. Timeout/disconnect/crash rămân unknown, fără retry; request ID este numai corelare.
+- S-a identificat mismatch de compatibilitate pentru etapa de integrare: validatorul Rendiv actual respinge `isError=true` cu `unknown` (`mcp_contract_v1.py:315-316`). Nu s-au modificat fișiere Python/teste; validatorul trebuie aliniat separat înainte de integrarea reală. Provenance-ul buildului Understory activ rămâne neconfirmat.
+- Acest checkpoint modifică numai contractul, planul, jurnalul de dezvoltare și raportul. Fără cod, teste runtime, acces la servicii sau schimbări Understory.
