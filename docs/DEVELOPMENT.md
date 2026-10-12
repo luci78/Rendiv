@@ -10,7 +10,7 @@
 | 4. Implementarea bufferului Rendiv | Acceptare asincronă, procesare serială și integrare cu sistemele sursă/destinație | Neîncepută; nu este autorizată în această etapă |
 | 5. Backup, recuperare și monitorizare | Online backup SQLite, verificare/restaurare izolată și agregate read-only | Încheiată local; numai DB temporare, fără deployment |
 | 6A. Worker local simulat | Claim FIFO serial, tranziții și audit atomic cu executor fictiv | Validată local și într-un container Docker temporar; fără worker automat sau executor extern |
-| 6B. Integrare Understory | Adaptor/protocol fake și contract structurat propus; fără transport real | 6B.2B simulat, 6B.2C aplicat, 6B.2D–6B.2F documentate. V1 rămâne propusă; integrarea reală neîncepută |
+| 6B. Integrare Understory | Adaptor/protocol fake și contract structurat propus; fără transport real | 6B.2B simulat, 6B.2C aplicat, 6B.2D–6B.2H documentate/testate offline. V1 rămâne propusă; integrarea reală neîncepută |
 
 La inițializarea documentară, etapele de implementare 2–5 nu fuseseră executate. Progresul curent al codului este urmărit separat mai jos.
 
@@ -240,6 +240,13 @@ Rollback-ul operat ulterior trebuie să folosească imaginea anterioară aprobat
 - Toate outcome-urile actuale se clasifică `unknown/unknown`, FIFO-blocking și fără retry. No-op maintain și rejected-before-write nu capătă tranziții terminale fără aprobările/dovezile pendinte.
 - Adăugat `tests/test_mcp_contract_v1.py` pentru cele cinci fixtures din documentul 06, cazuri pozitive/negative, fake transport, policy FIFO izolată și lipsă conexiuni de rețea. Validarea nu dovedește comportamentul Understory activ.
 - Testele și limitele efective ale checkpointului sunt consemnate în `docs/LATEST-REPORT.md`.
+
+### Checkpoint 6B.2H — compatibilitate MCP SDK și traseu simulat (2026-10-12)
+
+- Lockfile-ul local Understory rezolvă `@modelcontextprotocol/sdk` la 1.29.0, iar manifestul declară `^1.12.0`. Pachetul SDK și sursele sale nu sunt instalate local; versiunea imaginii active și wire behavior rămân neconfirmate.
+- `packages/server/src/mcp/server.ts` înregistrează cele trei operații cu rezultate text-only și nu propagă explicit JSON-RPC ID către `structuredContent`. Contractul V1 păstrează arguments neschimbate și cere `request_id` egal cu acel ID; fezabilitatea prin context/middleware SDK nu poate fi confirmată fără codul SDK. Compatibilitatea rezultatului structurat alături de `content` rămâne de verificat.
+- `tests/test_mcp_contract_fifo_simulation.py` este harness exclusiv de test: transport fake → validator → clasificator → tabel SQLite temporar. Outcome-urile acceptate și răspunsurile invalide/legacy/timeout/disconnect lasă primul job `unknown/unknown`, păstrează următorul `queued`, blochează FIFO și nu reapelează transportul.
+- Harness-ul nu folosește adaptorul/workerul de producție și nu dovedește interoperabilitatea SDK/Understory, durabilitatea, atomicitatea, idempotency sau efectele runtime. Raportul de compatibilitate și dovezile sunt în `docs/design/07-MCP-SDK-COMPATIBILITY.md`.
 
 ### Dezvoltare locală și teste izolate
 
