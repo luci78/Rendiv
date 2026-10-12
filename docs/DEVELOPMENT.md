@@ -10,7 +10,7 @@
 | 4. Implementarea bufferului Rendiv | Acceptare asincronă, procesare serială și integrare cu sistemele sursă/destinație | Neîncepută; nu este autorizată în această etapă |
 | 5. Backup, recuperare și monitorizare | Online backup SQLite, verificare/restaurare izolată și agregate read-only | Încheiată local; numai DB temporare, fără deployment |
 | 6A. Worker local simulat | Claim FIFO serial, tranziții și audit atomic cu executor fictiv | Validată local și într-un container Docker temporar; fără worker automat sau executor extern |
-| 6B. Integrare Understory | Adaptor/protocol fake și contract structurat propus; fără transport real | 6B.2B simulat, 6B.2C aplicat, 6B.2D–6B.2I documentate/testate. V1 rămâne propusă; integrarea reală neîncepută |
+| 6B. Integrare Understory | Adaptor/protocol fake și contract structurat propus; fără transport real | 6B.2B simulat, 6B.2C aplicat, 6B.2D–6B.2J documentate/testate. V1 rămâne propusă; integrarea reală neîncepută |
 
 La inițializarea documentară, etapele de implementare 2–5 nu fuseseră executate. Progresul curent al codului este urmărit separat mai jos.
 
@@ -255,6 +255,14 @@ Rollback-ul operat ulterior trebuie să folosească imaginea anterioară aprobat
 - `CallToolResultSchema` permite `structuredContent` opțional de tip record alături de `content`. Clientul high-level a primit ambele câmpuri, dar fără ID-ul exterior în result. Clientul a acceptat un ID V1 semantic greșit; forma MCP invalidă a fost respinsă. Consumul exclusiv de text `content` a continuat să funcționeze în proba locală.
 - V1 poate obține ID-ul server-side prin API public, fără câmp nou de argument. Un client ce cere comparație independentă cu ID-ul outer trebuie să observe requestul printr-un wrapper public de transport; alegerea este deschisă pentru integrare. Contractul și codul de producție nu au fost modificate.
 - Rezultatele complete, limitele și recomandarea sunt în `docs/design/08-MCP-SDK-129-RUNTIME-TEST.md`. SDK-ul temporar nu confirmă versiunea ori comportamentul imaginii Understory active.
+
+### Checkpoint 6B.2J — plan minim de implementare MCP V1 (2026-10-12)
+
+- Inspectat read-only checkout-ul Understory la commit exact `f6c342332f390a444a8669636b1cf8f9669dd995`, curat la verificare. Au fost urmărite sursele locale pentru cele trei handlers, `runMutation`, write tools, KnowledgeBase, bundle, indexer, logger, lint și trace. Identitatea buildului activ rămâne neconfirmată; nu s-au citit secrete sau date din bundle.
+- Traseul local emite numai text MCP. `runMutation` poate raporta `ok` fără căi; paths sunt adăugate după revenirea operației KB și pot omite un concept deja scris dacă un pas ulterior eșuează. Conceptul, indexurile, logul și prune sunt scrieri filesystem separate; nu s-a identificat rollback multi-fișier în traseul inspectat. Nici `changed_paths`, mesajul de eroare, `isError`, timeoutul sau paths goale nu dovedesc durabilitate ori absența efectului.
+- Ramura healthy din `memory_maintain` execută lint read-only și revine înainte de agent, dar răspunsul curent este text-only. Acesta este un fapt pentru checkout-ul local, nu o aprobare pentru `succeeded/complete` și nici o confirmare a buildului activ.
+- `docs/design/09-UNDERSTORY-V1-IMPLEMENTATION-PLAN.md` conține matrici per operație pentru toate outcome-urile V1, limite de atomicitate/durabilitate/idempotency/recovery, incompatibilitatea căilor cu slash inițial față de schema V1, conflictul `isError` pentru failed/unknown și planul minim pe fișiere. Recomandările sunt propuneri, nu implementare ori aprobare a contractului.
+- Nu s-au modificat codul executabil, adaptorul, workerul, contractul V1, Understory sau serviciile. Nu s-au rulat teste. Verificările acestui checkpoint sunt cele de documentație: `git diff --check` și linkuri locale. Push-ul este exclus de interdicția explicită de acces la rețea din cerere.
 
 ### Dezvoltare locală și teste izolate
 
