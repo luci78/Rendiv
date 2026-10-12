@@ -10,7 +10,7 @@
 | 4. Implementarea bufferului Rendiv | Acceptare asincronă, procesare serială și integrare cu sistemele sursă/destinație | Neîncepută; nu este autorizată în această etapă |
 | 5. Backup, recuperare și monitorizare | Online backup SQLite, verificare/restaurare izolată și agregate read-only | Încheiată local; numai DB temporare, fără deployment |
 | 6A. Worker local simulat | Claim FIFO serial, tranziții și audit atomic cu executor fictiv | Validată local și într-un container Docker temporar; fără worker automat sau executor extern |
-| 6B. Integrare Understory | Adaptor/protocol fake și contract structurat propus; fără transport real | 6B.2B simulat, 6B.2C aplicat, 6B.2D–6B.2H documentate/testate offline. V1 rămâne propusă; integrarea reală neîncepută |
+| 6B. Integrare Understory | Adaptor/protocol fake și contract structurat propus; fără transport real | 6B.2B simulat, 6B.2C aplicat, 6B.2D–6B.2I documentate/testate. V1 rămâne propusă; integrarea reală neîncepută |
 
 La inițializarea documentară, etapele de implementare 2–5 nu fuseseră executate. Progresul curent al codului este urmărit separat mai jos.
 
@@ -247,6 +247,14 @@ Rollback-ul operat ulterior trebuie să folosească imaginea anterioară aprobat
 - `packages/server/src/mcp/server.ts` înregistrează cele trei operații cu rezultate text-only și nu propagă explicit JSON-RPC ID către `structuredContent`. Contractul V1 păstrează arguments neschimbate și cere `request_id` egal cu acel ID; fezabilitatea prin context/middleware SDK nu poate fi confirmată fără codul SDK. Compatibilitatea rezultatului structurat alături de `content` rămâne de verificat.
 - `tests/test_mcp_contract_fifo_simulation.py` este harness exclusiv de test: transport fake → validator → clasificator → tabel SQLite temporar. Outcome-urile acceptate și răspunsurile invalide/legacy/timeout/disconnect lasă primul job `unknown/unknown`, păstrează următorul `queued`, blochează FIFO și nu reapelează transportul.
 - Harness-ul nu folosește adaptorul/workerul de producție și nu dovedește interoperabilitatea SDK/Understory, durabilitatea, atomicitatea, idempotency sau efectele runtime. Raportul de compatibilitate și dovezile sunt în `docs/design/07-MCP-SDK-COMPATIBILITY.md`.
+
+### Checkpoint 6B.2I — verificare MCP SDK 1.29.0 (2026-10-12)
+
+- SDK-ul exact `@modelcontextprotocol/sdk@1.29.0` a fost instalat numai în `/tmp/rendiv-cp6b2i-sdk129` (Node `v22.23.3`, npm `10.9.9`) și probat cu `McpServer`, `Client` și `InMemoryTransport.createLinkedPair()` într-un singur proces local.
+- Tipurile publice confirmă că `McpServer.registerTool` callback primește `RequestHandlerExtra`; acesta expune/documentează `requestId: RequestId`. Proba a observat că ID-ul handlerului corespunde requestului și răspunsului JSON-RPC pentru `memory_add`, `memory_update` și `memory_maintain` fake.
+- `CallToolResultSchema` permite `structuredContent` opțional de tip record alături de `content`. Clientul high-level a primit ambele câmpuri, dar fără ID-ul exterior în result. Clientul a acceptat un ID V1 semantic greșit; forma MCP invalidă a fost respinsă. Consumul exclusiv de text `content` a continuat să funcționeze în proba locală.
+- V1 poate obține ID-ul server-side prin API public, fără câmp nou de argument. Un client ce cere comparație independentă cu ID-ul outer trebuie să observe requestul printr-un wrapper public de transport; alegerea este deschisă pentru integrare. Contractul și codul de producție nu au fost modificate.
+- Rezultatele complete, limitele și recomandarea sunt în `docs/design/08-MCP-SDK-129-RUNTIME-TEST.md`. SDK-ul temporar nu confirmă versiunea ori comportamentul imaginii Understory active.
 
 ### Dezvoltare locală și teste izolate
 

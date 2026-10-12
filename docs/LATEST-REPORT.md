@@ -1,49 +1,53 @@
-# Raport Rendiv — Checkpoint 6B.2H: compatibilitate MCP SDK și integrare simulată
+# Raport Rendiv — Checkpoint 6B.2I: verificare reală MCP SDK 1.29.0
 
 Data: 2026-10-12
 
 ## Domeniu și fișiere
 
-A fost verificată offline versiunea MCP SDK indicată de checkout-ul Understory și a fost adăugat un harness exclusiv de test pentru traseul simulabil: răspuns MCP fake → validator V1 → clasificare Rendiv → poarta FIFO în SQLite temporar.
+S-a instalat și probat `@modelcontextprotocol/sdk@1.29.0` într-un director temporar dedicat. S-a folosit un server și client MCP de test cu transport in-memory și trei tool-uri complet fictive. Nu s-au conectat servicii active și nu s-au modificat codul de producție, Understory, Pithagoras, infrastructura, API-ul, baza Rendiv sau schema.
 
-Fișiere modificate:
+Fișierele repository-ului modificate pentru checkpoint:
 
-- `tests/test_mcp_contract_fifo_simulation.py` — transport fake în memorie, tabel SQLite creat sub `tmp_path`, cazuri pentru operații/outcome-uri și răspunsuri invalide.
-- `docs/design/07-MCP-SDK-COMPATIBILITY.md` — dovezi, limitele verificării SDK și deciziile necesare.
+- `docs/design/08-MCP-SDK-129-RUNTIME-TEST.md` — referințe SDK, rezultate experimentale, evaluarea V1 și recomandare.
 - `docs/DEVELOPMENT.md` — progresul checkpointului.
 - `docs/LATEST-REPORT.md` — raportul curent.
 
-Nu au fost modificate codul de producție, adaptorul, workerul, schema, API-ul, migrațiile, configurația deploymentului sau infrastructura. Nu s-au folosit Docker, servicii active, rețea, MCP/LLM, secrete, tokenuri ori memorie reală.
+## Mediu și verificare SDK
 
-## Compatibilitate SDK și contract
+- Preflight: repository curat la `18c22bdb4f7a1586fa71d06fd70587b1c6727114`; Node `v22.23.3`; npm `10.9.9`.
+- Instalare: `/tmp/rendiv-cp6b2i-sdk129`, comandă `npm install --save-exact --ignore-scripts --no-audit --no-fund @modelcontextprotocol/sdk@1.29.0`. `npm ls` și `package.json` instalat au confirmat exact `1.29.0`. Pachetul și dependențele au fost instalate numai acolo.
+- Tipurile publice din distribuție arată `McpServer.registerTool` cu `ToolCallback`; semnătura callbackului include `RequestHandlerExtra`, al cărui `requestId: RequestId` este documentat drept JSON-RPC ID al cererii curente.
+- `CallToolResultSchema` permite `structuredContent?: Record<string, unknown>` împreună cu `content`; implementarea și proba in-memory confirmă că ambele ajung la client.
 
-- `packages/server/package.json` din checkout-ul local declară `@modelcontextprotocol/sdk: ^1.12.0`.
-- `pnpm-lock.yaml` rezolvă pachetul la **1.29.0**, integrity `sha512-zo37mZA9hJWpULgkRpowewez1y6ML5GsXJPY8FI0tBBCd77HEvza4jDqRKOXgHNn867PVGCyTdzqpz0izu5ZjQ==`. Aceasta confirmă versiunea lockfile-ului local, nu versiunea imaginii Understory active.
-- Pachetul nu este instalat în `understory/node_modules`; sursele/distribuția SDK nu au fost găsite în checkout. Suportul concret pentru `structuredContent`, forma rezultatului `tools/call`, serializarea alături de `content` și accesul handlerului la JSON-RPC ID sunt **NECONFIRMATE**. Nu s-au instalat pachete și nu s-a accesat rețeaua.
-- În `packages/server/src/mcp/server.ts`, handlers-urile locale `memory_add`, `memory_update` și `memory_maintain` întorc explicit numai `content` text-only. Argumentele existente nu includ `request_id`, iar codul handlerelor inspectat nu propagă JSON-RPC ID. V1 cere `structuredContent.request_id` egal cu ID-ul JSON-RPC și păstrează argumentele neschimbate. Sursa locală nu demonstrează cum se poate satisface această cerință; accesul eventual prin contextul SDK/middleware rămâne necunoscut.
-- Clienții care consumă numai `content` ar putea rămâne compatibili dacă textul este păstrat, însă această ipoteză nu a fost verificată cu SDK-ul sau clienții reali. Documentul V1 rămâne PROPUS.
+## Probe experimentale
 
-## Traseul simulat și rezultate
+Cu `McpServer`, `Client` și `InMemoryTransport.createLinkedPair()` în același proces local:
 
-Harness-ul nou nu importă și nu execută adaptorul sau workerul de producție. Transportul fake oferă fixtures sau ridică timeout/disconnect; validatorul și clasificatorul sunt cele existente; tabelul SQLite minimal există numai în `tmp_path`.
+- Handlers fake pentru `memory_add`, `memory_update` și `memory_maintain` au primit `extra.requestId`; valoarea a coincis cu ID-ul JSON-RPC request/response observat la transport și a fost inclusă în `structuredContent.request_id`.
+- `Client.callTool()` a returnat `content` plus `structuredContent`, dar nu câmpul exterior `id`.
+- Citirea numai a `content[].text` a funcționat, simulând un client care ignoră `structuredContent`.
+- Un `structuredContent` care nu era obiect a fost respins de schema SDK/protocol.
+- Un obiect de forma generică MCP, dar cu `request_id` V1 diferit de ID-ul handlerului, a fost acceptat de SDK. SDK-ul nu verifică semantica Rendiv V1 fără validarea specifică a aplicației.
+- Nu s-au folosit porturi, rețea către servicii, MCP real, LLM ori date/memorie reale.
 
-Au fost acoperite toate trei operațiile (`memory_add`, `memory_update`, `memory_maintain`), outcome-urile valide `applied`, `partial`, `unknown`, `rejected_before_write` și `memory_maintain no_op`, plus no-op invalid la add/update. Au fost simulate răspuns legacy text-only, ID mismatch, JSON invalid/răspuns invalid, timeout și disconnect.
+## Decizie contractuală
 
-În fiecare caz acceptat sau eșuat, primul job este `unknown/unknown`, al doilea rămâne `queued`, FIFO este blocat și transportul fake este apelat exact o dată. Nu există retry automat. Niciun rezultat nu este promovat la `succeeded/complete` sau `failed/none`.
+Handlerul poate obține JSON-RPC ID prin API public, deci V1 nu necesită câmp nou de argument doar pentru a popula `request_id`. Codul Understory local nu folosește încă `extra.requestId` și produce în prezent numai `content`; nu a fost modificat.
 
-Testele demonstrează numai comportamentul fixtures, validatorului și politicii harness-ului. Nu demonstrează interoperabilitate cu MCP SDK/Understory, durabilitate, atomicitate, idempotency, autentificare sau efecte runtime.
+Clientul high-level nu returnează ID-ul outer în `CallToolResult`. Protocolul SDK corelează răspunsul înainte să rezolve `callTool`, dar o comparație independentă cu echo-ul `structuredContent.request_id` ar necesita un wrapper peste interfața publică `Transport.send` care observă ID-ul requestului. Alegerea acestui control pentru integrarea viitoare rămâne deschisă; V1 nu a fost schimbat.
 
-## Verificări
+SDK-ul acceptă doar forma generică MCP, nu regulile semantice V1. Validatorul Rendiv rămâne necesar. Outcome-urile `applied`, `partial`, `unknown`, timeout/disconnect și rezultatele ambigue rămân `unknown/unknown`; `no_op` și `rejected_before_write` rămân de asemenea `unknown/unknown`. Nu apare retry automat sau deblocare FIFO.
+
+## Verificări și curățare
 
 - Suita completă: **239 passed** cu Python 3.12.3 în `/tmp/rendiv-stage1-venv`.
 - `pip check`: PASS — `No broken requirements found`.
 - `git diff --check`: PASS.
+- Proba MCP SDK 1.29.0: PASS pentru verificările enumerate.
+- Instalarea și scriptul temporar au fost eliminate exclusiv din `/tmp/rendiv-cp6b2i-sdk129` după verificări.
 
-## Limite și următorii gate-uri
+## Limite rămase
 
-1. Inspectarea sursei exacte a SDK 1.29.0 pentru tipurile/implementarea rezultatului MCP și contextul handlerului.
-2. Demonstrarea unei căi de corelare JSON-RPC ID → `request_id` fără modificarea implicită a schemei argumentelor; dacă nu există, contractul și compatibilitatea trebuie revizuite explicit.
-3. Confirmarea că SDK-ul serializează simultan `structuredContent` și textul `content` și că clienții text-only continuă să funcționeze.
-4. Proveniența runtime Understory este în continuare neconfirmată; nu s-a verificat containerul ori serviciul activ.
+Proba confirmă SDK npm 1.29.0, nu versiunea sau configurația din imaginea Understory activă. Nu demonstrează efecte Understory, idempotency, atomicitate, durability, autentificare, timeouturi runtime sau compatibilitatea tuturor clienților terți. Contractul V1 rămâne propus, iar integrarea reală neîncepută.
 
-Nu începe checkpointul 6B.2I și nu porni integrarea reală.
+Nu începe checkpointul următor și nu conecta Rendiv la Understory.
